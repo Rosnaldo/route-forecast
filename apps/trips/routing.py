@@ -19,6 +19,10 @@ FIELD_MASK = "routes.distanceMeters,routes.duration,routes.polyline.encodedPolyl
 TIMEOUT_SECONDS = 10
 
 
+# A route end: (lat, lon) coordinates, or an address/place name Google geocodes.
+Waypoint = tuple[float, float] | str
+
+
 @dataclass(frozen=True)
 class Route:
     distance_m: int
@@ -26,8 +30,8 @@ class Route:
     points: list[tuple[float, float]]  # (lat, lon), departure first
 
 
-def compute_route(origin: tuple[float, float], destination: tuple[float, float]) -> Route:
-    """Fastest driving route from origin to destination, both (lat, lon)."""
+def compute_route(origin: Waypoint, destination: Waypoint) -> Route:
+    """Fastest driving route from origin to destination."""
     if not settings.GOOGLE_ROUTES_API_KEY:
         raise UpstreamError("GOOGLE_ROUTES_API_KEY is not configured")
 
@@ -66,7 +70,9 @@ def compute_route(origin: tuple[float, float], destination: tuple[float, float])
     )
 
 
-def _waypoint(point: tuple[float, float]) -> dict:
+def _waypoint(point: Waypoint) -> dict:
+    if isinstance(point, str):
+        return {"address": point}
     lat, lon = point
     return {"location": {"latLng": {"latitude": lat, "longitude": lon}}}
 

@@ -63,6 +63,42 @@ def test_route(api_client):
     assert sent["travelMode"] == "DRIVE"
 
 
+def test_route_from_addresses(api_client):
+    payload = {"routes": [{"distanceMeters": 1, "polyline": {"encodedPolyline": ENCODED}}]}
+    with fake_urlopen(payload) as urlopen:
+        response = api_client.post(
+            URL, {"departure": {"address": "Denver, CO"}, "arrival": {"address": "Vail, CO"}}
+        )
+    assert response.status_code == 200
+    sent = json.loads(urlopen.call_args.args[0].data)
+    assert sent["origin"] == {"address": "Denver, CO"}
+    assert sent["destination"] == {"address": "Vail, CO"}
+
+
+@pytest.mark.parametrize(
+    "point",
+    [{}, {"lat": 39.7}, {"lat": 39.7, "lon": -105.0, "address": "Denver, CO"}, {"address": ""}],
+)
+def test_point_needs_coordinates_or_address(api_client, point):
+    response = api_client.post(URL, {"departure": point, "arrival": VAIL})
+    assert response.status_code == 400
+    assert "departure" in response.json()
+
+
+def test_example_routes(api_client):
+    response = api_client.get("/api/v1/trips/examples/")
+    assert response.status_code == 200
+    rows = response.json()
+    assert len(rows) == 10
+    assert rows[0] | {"purpose": None} == {
+        "id": 1,
+        "departure": "Denver, CO",
+        "arrival": "Vail, CO",
+        "distance_km": 160,
+        "purpose": None,
+    }
+
+
 def test_no_route_found(api_client):
     with fake_urlopen({}):
         response = api_client.post(URL, {"departure": DENVER, "arrival": VAIL})

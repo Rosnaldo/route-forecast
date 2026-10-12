@@ -1,3 +1,6 @@
+import csv
+
+from django.conf import settings
 from rest_framework import serializers
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -6,10 +9,24 @@ from rest_framework.views import APIView
 from .counties import counties_along
 from .routing import compute_route
 
+EXAMPLE_ROUTES_FILE = settings.BASE_DIR / "example_routes.csv"
+
 
 class PointSerializer(serializers.Serializer):
-    lat = serializers.FloatField(min_value=-90, max_value=90)
-    lon = serializers.FloatField(min_value=-180, max_value=180)
+    """Either coordinates ({lat, lon}) or a place name Google can geocode ({address})."""
+
+    lat = serializers.FloatField(min_value=-90, max_value=90, required=False)
+    lon = serializers.FloatField(min_value=-180, max_value=180, required=False)
+    address = serializers.CharField(max_length=200, required=False)
+
+    def to_internal_value(self, data):
+        """Return (lat, lon) or the address string, as compute_route expects."""
+        attrs = super().to_internal_value(data)
+        if "address" in attrs and not ({"lat", "lon"} & attrs.keys()):
+            return attrs["address"]
+        if {"lat", "lon"} <= attrs.keys() and "address" not in attrs:
+            return attrs["lat"], attrs["lon"]
+        raise serializers.ValidationError("Give either lat and lon, or address.")
 
 
 class RouteRequestSerializer(serializers.Serializer):
@@ -39,9 +56,18 @@ class RouteView(APIView):
     def post(self, request: Request, version: str) -> Response:
         params = RouteRequestSerializer(data=request.data)
         params.is_valid(raise_exception=True)
-        departure, arrival = params.validated_data["departure"], params.validated_data["arrival"]
-        route = compute_route(
-            (departure["lat"], departure["lon"]), (arrival["lat"], arrival["lon"])
-        )
+        route = compute_route(params.validated_data["departure"], params.validated_data["arrival"])
         data = {**vars(route), "counties": counties_along(route.points)}
         return Response(RouteResponseSerializer(data).data)
+
+
+class ExampleRoutesView(APIView):
+    """Sample trips from example_routes.csv, for trying the route endpoint."""
+
+    def get(self, request: Request, version: str) -> Response:
+        with EXAMPLE_ROUTES_FILE.open(newline="") as file:
+            rows = [
+                {**row, "id": int(row["id"]), "distance_km": int(row["distance_km"])}
+                for row in csv.DictReader(file)
+            ]
+        return Response(rows)

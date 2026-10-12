@@ -13,7 +13,7 @@ body {
   background: var(--bg);
   color: var(--fg);
 }
-.container { max-width: 720px; margin: 4rem auto; padding: 0 16px; }
+.container { max-width: 960px; margin: 4rem auto; padding: 0 16px; }
 h1 { font-weight: 800; }
 a { color: var(--accent); }
 
@@ -35,3 +35,28 @@ a { color: var(--accent); }
 .legend-line { width: 24px; height: 4px; border-radius: 2px; background: #eb6834; }
 .legend-ramp { width: 96px; height: 10px; border-radius: 4px; }
 .legend-hover { color: var(--fg); font-weight: 700; }
+
+.route-result { margin-top: 2rem; scroll-margin-top: 1rem; }
+.route-title { font-size: 1.25rem; margin: 0 0 0.25rem; }
+
+.examples { margin-top: 2.5rem; overflow-x: auto; }
+.examples-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+.examples-table caption { text-align: left; font-weight: 700; margin-bottom: 0.5rem; }
+.examples-table th {
+  text-align: left; color: var(--muted); font-weight: 600;
+  border-bottom: 1px solid color-mix(in srgb, var(--muted) 40%, transparent);
+  padding: 0.5rem;
+}
+.examples-table td {
+  padding: 0.6rem 0.5rem; vertical-align: top;
+  border-bottom: 1px solid color-mix(in srgb, var(--muted) 20%, transparent);
+}
+.examples-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.examples-table .purpose { color: var(--muted); }
+.examples-table tbody tr { cursor: pointer; }
+.examples-table tbody tr:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.examples-table tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.examples-table tbody tr.selected {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  box-shadow: inset 4px 0 0 var(--accent);
+}
