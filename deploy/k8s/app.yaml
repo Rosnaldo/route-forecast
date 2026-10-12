@@ -1,0 +1,159 @@
+# EKS manifests (kubectl apply -f deploy/k8s/). Secrets come from AWS Secrets
+# Manager via the External Secrets Operator; AWS access via IRSA (no keys).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: shop
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::<ACCOUNT_ID>:role/shop-irsa-role
+---
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: shop-secrets
+spec:
+  refreshInterval: 1h
+  secretStoreRef: { name: aws-secrets-manager, kind: ClusterSecretStore }
+  target: { name: shop-secrets }
+  dataFrom:
+    - extract: { key: shop/prod }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: shop-config
+data:
+  DJANGO_SETTINGS_MODULE: config.settings.prod
+  ALLOWED_HOSTS: api.example.com
+  AWS_REGION: us-east-1
+  AWS_STORAGE_BUCKET_NAME: shop-media-<ACCOUNT_ID>
+  LOG_FORMAT: json
+---
+# Migrations run once per release, before the Deployment rolls out.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: shop-migrate
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      serviceAccountName: shop
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/shop:<GIT_SHA>
+          command: ["python", "manage.py", "migrate", "--noinput"]
+          envFrom: [{ configMapRef: { name: shop-config } }, { secretRef: { name: shop-secrets } }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shop-web
+spec:
+  replicas: 3
+  selector: { matchLabels: { app: shop-web } }
+  strategy:
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  template:
+    metadata:
+      labels: { app: shop-web }
+    spec:
+      serviceAccountName: shop
+      containers:
+        - name: web
+          image: <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/shop:<GIT_SHA>
+          ports: [{ containerPort: 8000 }]
+          env: [{ name: GUNICORN_WORKERS, value: "3" }]
+          envFrom: [{ configMapRef: { name: shop-config } }, { secretRef: { name: shop-secrets } }]
+          readinessProbe:
+            httpGet: { path: /health/, port: 8000 }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health/, port: 8000 }
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits: { memory: 1Gi }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shop-worker
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: shop-worker } }
+  template:
+    metadata:
+      labels: { app: shop-worker }
+    spec:
+      serviceAccountName: shop
+      terminationGracePeriodSeconds: 120  # let in-flight tasks finish
+      containers:
+        - name: worker
+          image: <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/shop:<GIT_SHA>
+          command: ["celery", "-A", "config", "worker", "-l", "info", "--concurrency", "4"]
+          envFrom: [{ configMapRef: { name: shop-config } }, { secretRef: { name: shop-secrets } }]
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shop-beat
+spec:
+  replicas: 1  # exactly one scheduler, or periodic tasks run twice
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: shop-beat } }
+  template:
+    metadata:
+      labels: { app: shop-beat }
+    spec:
+      serviceAccountName: shop
+      containers:
+        - name: beat
+          image: <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/shop:<GIT_SHA>
+          command: ["celery", "-A", "config", "beat", "-l", "info", "--schedule", "/tmp/celerybeat-schedule"]
+          envFrom: [{ configMapRef: { name: shop-config } }, { secretRef: { name: shop-secrets } }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: shop-web
+spec:
+  selector: { app: shop-web }
+  ports: [{ port: 80, targetPort: 8000 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: shop
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS": 443}]'
+    alb.ingress.kubernetes.io/healthcheck-path: /health/
+spec:
+  ingressClassName: alb
+  rules:
+    - host: api.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: shop-web, port: { number: 80 } } }
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: shop-web
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: shop-web }
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource: { name: cpu, target: { type: Utilization, averageUtilization: 70 } }

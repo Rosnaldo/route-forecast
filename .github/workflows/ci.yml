@@ -1,0 +1,89 @@
+# NOTE: GitHub only reads workflows from the repository root's .github/.
+# This project lives in a subfolder of my-study, so either move this file to
+# <repo>/.github/workflows/ (keeping `working-directory`) or make django-test its own repo.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+defaults:
+  run:
+    working-directory: django-test
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run python manage.py makemigrations --check --dry-run  # forgot a migration?
+        env:
+          DJANGO_SETTINGS_MODULE: config.settings.test
+
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: shop
+          POSTGRES_PASSWORD: shop
+          POSTGRES_DB: shop
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U shop" --health-interval 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+    env:
+      DATABASE_URL: postgres://shop:shop@localhost:5432/shop
+      REDIS_URL: redis://localhost:6379
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run pytest --create-db --cov --cov-report=xml --cov-fail-under=85
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: django-test/coverage.xml
+
+  # Build on every PR; push to ECR only from main.
+  docker:
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # OIDC federation to AWS: no long-lived access keys in GitHub
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Configure AWS credentials
+        if: github.ref == 'refs/heads/main' && vars.AWS_ROLE_ARN != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Login to ECR
+        id: ecr
+        if: github.ref == 'refs/heads/main' && vars.AWS_ROLE_ARN != ''
+        uses: aws-actions/amazon-ecr-login@v2
+      - uses: docker/build-push-action@v6
+        with:
+          context: django-test
+          file: django-test/docker/Dockerfile
+          push: ${{ github.ref == 'refs/heads/main' && vars.AWS_ROLE_ARN != '' }}
+          tags: ${{ steps.ecr.outputs.registry }}/shop:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
