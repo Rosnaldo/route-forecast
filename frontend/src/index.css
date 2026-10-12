@@ -26,14 +26,22 @@ a { color: var(--accent); }
 .county-list { color: var(--muted); padding-left: 1.5rem; columns: 2; }
 
 .route-map { margin: 0 0 1.5rem; }
+.departure-slider { display: grid; gap: 0.25rem; margin-bottom: 0.75rem; font-size: 0.9rem; }
+.departure-slider input { width: 100%; accent-color: var(--accent); }
+.departure-scale {
+  display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--muted);
+}
 .route-map-canvas { height: 420px; border-radius: 8px; overflow: hidden; }
 .route-map-legend {
   display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1.25rem;
   margin-top: 0.75rem; font-size: 0.85rem; color: var(--muted);
 }
 .legend-item { display: inline-flex; align-items: center; gap: 0.5rem; }
-.legend-line { width: 24px; height: 4px; border-radius: 2px; background: #eb6834; }
-.legend-ramp { width: 96px; height: 10px; border-radius: 4px; }
+.legend-line {
+  width: 24px; height: 4px; border-radius: 2px; background: #1d2433;
+  box-shadow: 0 0 0 1.5px #fff; /* same white casing as the map line */
+}
+.legend-swatch { width: 14px; height: 14px; border-radius: 3px; }
 .legend-hover { color: var(--fg); font-weight: 700; }
 
 .route-result { margin-top: 2rem; scroll-margin-top: 1rem; }

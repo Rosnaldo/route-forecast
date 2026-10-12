@@ -8,6 +8,7 @@ from rest_framework.views import APIView
 
 from .counties import counties_along
 from .routing import compute_route
+from .weather import FORECAST_HOURS, weather_grid
 
 EXAMPLE_ROUTES_FILE = settings.BASE_DIR / "example_routes.csv"
 
@@ -41,15 +42,48 @@ class CountySerializer(serializers.Serializer):
     geometry = serializers.JSONField(source="outline", allow_null=True)
 
 
+class GridPointSerializer(serializers.Serializer):
+    """A grid cell center: hourly series from WeatherGrid.start, null where no forecast."""
+
+    lat = serializers.FloatField()
+    lon = serializers.FloatField()
+    offset_s = serializers.IntegerField()
+    wind_mph = serializers.ListField(child=serializers.FloatField(allow_null=True))
+    rain_in_hr = serializers.ListField(child=serializers.FloatField(allow_null=True))
+    snow_in_hr = serializers.ListField(child=serializers.FloatField(allow_null=True))
+    levels = serializers.ListField(child=serializers.IntegerField(allow_null=True))
+
+
+class WeatherCellSerializer(serializers.Serializer):
+    """One grid cell clipped to one county; `point` indexes WeatherGridSerializer.points."""
+
+    point = serializers.IntegerField()
+    fips = serializers.CharField(source="county.fips")
+    geometry = serializers.JSONField(source="outline")
+
+
+class WeatherGridSerializer(serializers.Serializer):
+    now = serializers.IntegerField()
+    start = serializers.IntegerField()
+    hours = serializers.SerializerMethodField()
+    points = GridPointSerializer(many=True)
+    cells = WeatherCellSerializer(many=True)
+
+    def get_hours(self, grid) -> int:
+        return FORECAST_HOURS
+
+
 class RouteResponseSerializer(serializers.Serializer):
     distance_m = serializers.IntegerField()
     duration_s = serializers.IntegerField()
     points = serializers.ListField(child=serializers.ListField(child=serializers.FloatField()))
     counties = CountySerializer(many=True)
+    weather = WeatherGridSerializer()
 
 
 class RouteView(APIView):
-    """Driving route between departure and arrival: [lat, lon] points and counties crossed."""
+    """Driving route between departure and arrival: [lat, lon] points, counties crossed,
+    and the hourly weather risk for the next FORECAST_HOURS on a grid over those counties."""
 
     serializer_class = RouteRequestSerializer
 
@@ -57,7 +91,8 @@ class RouteView(APIView):
         params = RouteRequestSerializer(data=request.data)
         params.is_valid(raise_exception=True)
         route = compute_route(params.validated_data["departure"], params.validated_data["arrival"])
-        data = {**vars(route), "counties": counties_along(route.points)}
+        counties = counties_along(route.points)
+        data = {**vars(route), "counties": counties, "weather": weather_grid(route, counties)}
         return Response(RouteResponseSerializer(data).data)
 
 

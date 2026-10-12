@@ -7,6 +7,7 @@ import pytest
 
 from apps.trips.counties import County, counties_along
 from apps.trips.routing import decode_polyline
+from apps.trips.weather import WeatherGrid
 
 URL = "/api/v1/trips/route/"
 DENVER = {"lat": 39.7392, "lon": -104.9903}
@@ -22,6 +23,14 @@ def _routes_key(settings):
     settings.GOOGLE_ROUTES_API_KEY = "test-key"
 
 
+@pytest.fixture(autouse=True)
+def _no_weather():
+    """The weather grid has its own tests (unit/test_weather.py); keep these offline."""
+    grid = WeatherGrid(now=1_800_000_000, start=1_799_998_400, points=[], cells=[])
+    with mock.patch("apps.trips.views.weather_grid", return_value=grid) as weather:
+        yield weather
+
+
 def fake_urlopen(payload):
     return mock.patch(
         "apps.trips.routing.urllib.request.urlopen",
@@ -33,7 +42,7 @@ def test_decode_polyline():
     assert decode_polyline(ENCODED) == DECODED
 
 
-def test_route(api_client):
+def test_route(api_client, _no_weather):
     payload = {
         "routes": [
             {
@@ -56,8 +65,16 @@ def test_route(api_client):
         "duration_s": 6300,
         "points": [list(p) for p in DECODED],
         "counties": [{"fips": "08031", "name": "Denver", "state": "CO", "geometry": None}],
+        "weather": {
+            "now": 1_800_000_000,
+            "start": 1_799_998_400,
+            "hours": 48,
+            "points": [],
+            "cells": [],
+        },
     }
     counties.assert_called_once_with(DECODED)
+    assert _no_weather.call_args.args[1] == [denver]
     sent = json.loads(urlopen.call_args.args[0].data)
     assert sent["origin"]["location"]["latLng"] == {"latitude": 39.7392, "longitude": -104.9903}
     assert sent["travelMode"] == "DRIVE"
