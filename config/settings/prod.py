@@ -1,7 +1,7 @@
 """
 Production settings (AWS).
 
-- Database: RDS PostgreSQL via DATABASE_URL (sslmode=require).
+- Cache/broker: ElastiCache Redis via REDIS_URL (no database).
 - Secrets: AWS Secrets Manager, merged into the environment before settings are read.
 - Media/static: S3 behind CloudFront (django-storages).
 - Credentials: none in code/env — the ECS task role / EKS IRSA role grants IAM access.
@@ -17,15 +17,12 @@ from .base import env  # noqa: E402
 DEBUG = False
 SECRET_KEY = env("SECRET_KEY")  # no default: fail fast if missing
 
-DATABASES["default"]["OPTIONS"] = {"sslmode": env("DB_SSLMODE", default="require")}  # noqa: F405
-
 # Behind nginx / ALB, which terminates TLS.
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SECURE_SSL_REDIRECT = env.bool("SECURE_SSL_REDIRECT", default=True)
 SECURE_HSTS_SECONDS = 60 * 60 * 24 * 30
 SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 SECURE_HSTS_PRELOAD = True
-SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
 SECURE_CONTENT_TYPE_NOSNIFF = True
 

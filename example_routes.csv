@@ -1,0 +1,11 @@
+id,departure,arrival,distance_km,purpose
+1,"Denver, CO","Vail, CO",160,"Short mountain route on I-70 over the Eisenhower Tunnel (~3,400 m); early snow and gusts, weather changes fast"
+2,"Salt Lake City, UT","Cheyenne, WY",700,"I-80 across southern Wyoming; strong crosswinds, tests the wind factor"
+3,"Chicago, IL","Minneapolis, MN",650,"Midwest interstate; rain or snow depending on the day, crosses three states and many counties"
+4,"Houston, TX","New Orleans, LA",560,"Gulf Coast I-10; heavy rain and thunderstorms, tests the rain factor"
+5,"Dallas, TX","Oklahoma City, OK",330,"Plains route; severe storms, gusts, sometimes freezing rain in winter"
+6,"Seattle, WA","Spokane, WA",450,"Crosses Snoqualmie Pass; rain on the coast, snow on the pass, dry east side"
+7,"Los Angeles, CA","Las Vegas, NV",435,"Usually calm and dry; baseline that should score low risk (watch Cajon Pass wind)"
+8,"Atlanta, GA","Atlanta Hartsfield-Jackson Airport",15,"Very short trip; edge case for the minimum number of route points"
+9,"Miami, FL","Seattle, WA",5300,"Cross-country, longer than 48 h of driving; part of the trip is beyond the forecast window"
+10,"Port of Long Beach, CA","Phoenix Sky Harbor Airport, AZ",600,"Landmark-to-landmark input instead of city names, like real truck trips"

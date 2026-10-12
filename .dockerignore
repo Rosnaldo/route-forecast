@@ -1,4 +1,5 @@
 .venv
+frontend
 .git
 **/__pycache__
 .env

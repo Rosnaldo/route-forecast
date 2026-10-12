@@ -2,17 +2,17 @@
 A tiny in-process event bus (DDD "domain events").
 
 The publisher (a service) does not know who reacts to an event; handlers in
-other apps subscribe at startup (AppConfig.ready). Handlers run only after the
-DB transaction commits, so they never act on data that is later rolled back.
+other apps subscribe at startup (AppConfig.ready). Handlers run synchronously,
+in subscription order; one failing handler is logged and does not stop the others.
 """
 
+import logging
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from functools import partial, update_wrapper
 
-from django.db import transaction
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -38,8 +38,7 @@ def subscribe(event_type: type[DomainEvent]) -> Callable[[Handler], Handler]:
 
 def publish(event: DomainEvent) -> None:
     for handler in _handlers[type(event)]:
-        # robust=True: a failing handler is logged and does not stop the others.
-        # update_wrapper gives the partial the handler's __qualname__, which
-        # Django's robust error logging needs.
-        callback = update_wrapper(partial(handler, event), handler)
-        transaction.on_commit(callback, robust=True)
+        try:
+            handler(event)
+        except Exception:
+            logger.exception("Event handler %s failed for %r", handler.__qualname__, event)

@@ -29,25 +29,6 @@ data:
   AWS_STORAGE_BUCKET_NAME: shop-media-<ACCOUNT_ID>
   LOG_FORMAT: json
 ---
-# Migrations run once per release, before the Deployment rolls out.
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: shop-migrate
-  annotations:
-    argocd.argoproj.io/hook: PreSync
-spec:
-  backoffLimit: 2
-  template:
-    spec:
-      serviceAccountName: shop
-      restartPolicy: Never
-      containers:
-        - name: migrate
-          image: <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/shop:<GIT_SHA>
-          command: ["python", "manage.py", "migrate", "--noinput"]
-          envFrom: [{ configMapRef: { name: shop-config } }, { secretRef: { name: shop-secrets } }]
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:

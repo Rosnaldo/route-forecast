@@ -1,7 +1,7 @@
 [project]
 name = "shop"
 version = "0.1.0"
-description = "Django API base: DRF, Postgres, Celery, Docker, AWS."
+description = "Django API base: DRF, Redis, Celery, Docker, AWS."
 requires-python = ">=3.12"
 dependencies = [
     "django>=5.2,<6.1",
@@ -9,7 +9,6 @@ dependencies = [
     "django-filter>=25.1",
     "drf-spectacular>=0.28",
     "django-environ>=0.12",
-    "psycopg[binary]>=3.2",
     "celery[redis]>=5.5",
     "redis>=5.2",
     "uvicorn[standard]>=0.34",
@@ -25,7 +24,6 @@ dev = [
     "pytest>=8.3",
     "pytest-django>=4.10",
     "pytest-cov>=6.0",
-    "factory-boy>=3.3",
     "ruff>=0.9",
 ]
 
@@ -35,16 +33,15 @@ package = false
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "config.settings.test"
 python_files = ["test_*.py"]
-addopts = "-ra --strict-markers --reuse-db"
+addopts = "-ra --strict-markers"
 
 [tool.coverage.run]
 source = ["apps", "config"]
-omit = ["*/migrations/*", "config/asgi.py", "config/wsgi.py"]
+omit = ["config/asgi.py", "config/wsgi.py"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-extend-exclude = ["*/migrations/*"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "DJ", "SIM"]

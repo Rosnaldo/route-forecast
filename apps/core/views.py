@@ -1,5 +1,4 @@
 from django.core.cache import cache
-from django.db import connection
 from django.http import HttpRequest, JsonResponse
 from django.shortcuts import render
 from django.views.decorators.http import require_GET
@@ -15,12 +14,6 @@ def home(request: HttpRequest):
 def health(request: HttpRequest) -> JsonResponse:
     """Liveness/readiness probe for Docker, ALB target groups, Kubernetes."""
     checks = {}
-    try:
-        with connection.cursor() as cursor:
-            cursor.execute("SELECT 1")
-        checks["database"] = "ok"
-    except Exception as exc:  # noqa: BLE001
-        checks["database"] = f"error: {exc.__class__.__name__}"
     try:
         cache.set("health", "ok", 5)
         checks["cache"] = "ok" if cache.get("health") == "ok" else "error"

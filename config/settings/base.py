@@ -24,14 +24,9 @@ ALLOWED_HOSTS = env("ALLOWED_HOSTS")
 CSRF_TRUSTED_ORIGINS = env.list("CSRF_TRUSTED_ORIGINS", default=[])
 
 # --------------------------------------------------------------------------- apps
+# No database: no admin, auth, sessions or contenttypes. State lives in Redis.
 DJANGO_APPS = [
-    "django.contrib.admin",
-    "django.contrib.auth",
-    "django.contrib.contenttypes",
-    "django.contrib.sessions",
-    "django.contrib.messages",
     "django.contrib.staticfiles",
-    "django.contrib.postgres",  # SearchVector, GinIndex, ArrayField...
 ]
 THIRD_PARTY_APPS = [
     "rest_framework",
@@ -41,7 +36,6 @@ THIRD_PARTY_APPS = [
 ]
 LOCAL_APPS = [
     "apps.core",
-    "apps.users",
 ]
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
@@ -50,11 +44,8 @@ MIDDLEWARE = [
     "apps.core.middleware.RequestIDMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
-    "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
-    "django.contrib.auth.middleware.AuthenticationMiddleware",
-    "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "apps.core.middleware.RequestTimingMiddleware",
 ]
@@ -71,28 +62,13 @@ TEMPLATES = [
         "OPTIONS": {
             "context_processors": [
                 "django.template.context_processors.request",
-                "django.contrib.auth.context_processors.auth",
-                "django.contrib.messages.context_processors.messages",
             ],
         },
     },
 ]
 
 # ----------------------------------------------------------------------- database
-# DATABASE_URL example: postgres://shop:shop@localhost:5432/shop
-DATABASES = {"default": env.db("DATABASE_URL", default="postgres://shop:shop@localhost:5432/shop")}
-DATABASES["default"]["CONN_MAX_AGE"] = env.int("DB_CONN_MAX_AGE", default=60)
-DATABASES["default"]["CONN_HEALTH_CHECKS"] = True
-DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
-
-# --------------------------------------------------------------------------- auth
-AUTH_USER_MODEL = "users.User"  # minimal custom user, used by the admin
-AUTH_PASSWORD_VALIDATORS = [
-    {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
-    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
-    {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
-    {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
-]
+DATABASES: dict = {}  # none: forecasts and other state live in Redis
 
 # ----------------------------------------------------------------------------- i18n
 LANGUAGE_CODE = "en-us"
@@ -152,13 +128,6 @@ SPECTACULAR_SETTINGS = {
     "SERVE_INCLUDE_SCHEMA": False,
 }
 
-# -------------------------------------------------------------------------- email
-EMAIL_BACKEND = env("EMAIL_BACKEND", default="django.core.mail.backends.smtp.EmailBackend")
-EMAIL_HOST = env("EMAIL_HOST", default="localhost")
-EMAIL_PORT = env.int("EMAIL_PORT", default=1025)
-EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=False)
-DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="Shop <no-reply@shop.local>")
-
 # ------------------------------------------------------------------------- celery
 CELERY_BROKER_URL = env("CELERY_BROKER_URL", default=f"{REDIS_URL}/0")
 CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", default=f"{REDIS_URL}/0")
@@ -187,7 +156,4 @@ LOGGING = {
         },
     },
     "root": {"handlers": ["console"], "level": LOG_LEVEL},
-    "loggers": {
-        "django.db.backends": {"level": env("DB_LOG_LEVEL", default="WARNING")},
-    },
 }

@@ -4,14 +4,14 @@ teardown even if the block raises. Two ways to write them: a class with
 __enter__/__exit__, or a generator decorated with @contextmanager.
 """
 
+import logging
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from types import TracebackType
 
-from django.db import connection
-from django.test.utils import CaptureQueriesContext
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -41,13 +41,14 @@ class Timer:
 
 
 @contextmanager
-def count_queries() -> Iterator[CaptureQueriesContext]:
-    """Generator-based context manager that records SQL executed in the block.
-    Works even with DEBUG=False; handy for spotting N+1 queries.
+def log_duration(label: str) -> Iterator[None]:
+    """Generator-based context manager: logs how long the block took, even if it raises.
 
-    with count_queries() as ctx:
-        list(User.objects.all())
-    len(ctx.captured_queries)
+    with log_duration("fetch forecast"):
+        fetch_forecast()
     """
-    with CaptureQueriesContext(connection) as ctx:
-        yield ctx
+    start = time.perf_counter()
+    try:
+        yield
+    finally:
+        logger.info("%s took %.1f ms", label, (time.perf_counter() - start) * 1000)

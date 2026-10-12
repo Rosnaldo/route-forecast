@@ -22,7 +22,6 @@
       ],
       "secrets": [
         { "name": "SECRET_KEY", "valueFrom": "arn:aws:secretsmanager:<REGION>:<ACCOUNT_ID>:secret:shop/prod:SECRET_KEY::" },
-        { "name": "DATABASE_URL", "valueFrom": "arn:aws:secretsmanager:<REGION>:<ACCOUNT_ID>:secret:shop/prod:DATABASE_URL::" },
         { "name": "REDIS_URL", "valueFrom": "arn:aws:secretsmanager:<REGION>:<ACCOUNT_ID>:secret:shop/prod:REDIS_URL::" }
       ],
       "healthCheck": {

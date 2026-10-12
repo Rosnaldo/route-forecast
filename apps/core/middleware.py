@@ -11,7 +11,6 @@ import time
 import uuid
 
 from asgiref.sync import iscoroutinefunction, markcoroutinefunction
-from django.db import connection
 
 from .logging import request_id_var
 
@@ -52,14 +51,13 @@ class RequestIDMiddleware:
 
 
 class RequestTimingMiddleware:
-    """Logs method, path, status, duration and number of SQL queries."""
+    """Logs method, path, status and duration."""
 
     def __init__(self, get_response):
         self.get_response = get_response
 
     def __call__(self, request):
         start = time.perf_counter()
-        queries_before = len(connection.queries)  # only populated when DEBUG=True
         response = self.get_response(request)
         duration_ms = (time.perf_counter() - start) * 1000
         response["Server-Timing"] = f"app;dur={duration_ms:.1f}"
@@ -71,7 +69,6 @@ class RequestTimingMiddleware:
             extra={
                 "duration_ms": round(duration_ms, 1),
                 "status": response.status_code,
-                "queries": len(connection.queries) - queries_before,
             },
         )
         return response

@@ -4,7 +4,7 @@ import logging
 
 import pytest
 
-from apps.core.utils.context_managers import Timer
+from apps.core.utils.context_managers import Timer, log_duration
 from apps.core.utils.decorators import retry, timed
 from apps.core.utils.iterators import Countdown, chunked, csv_rows
 
@@ -62,6 +62,12 @@ def test_timer_context_manager_measures_and_propagates():
     with pytest.raises(ZeroDivisionError), Timer() as t2:
         1 / 0  # noqa: B018
     assert t2.elapsed_ms > 0  # __exit__ ran anyway
+
+
+def test_log_duration_logs_even_when_block_raises(caplog):
+    with caplog.at_level("INFO"), pytest.raises(ValueError), log_duration("work"):
+        raise ValueError
+    assert "work took" in caplog.text
 
 
 def test_chunked_generator_is_lazy():

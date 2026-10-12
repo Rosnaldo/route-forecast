@@ -1,71 +1,54 @@
-# Local stack: docker compose up --build
-x-app: &app
-  image: shop:local  # built once, shared by web/worker/beat
+# Development stack with hot reload: docker compose up --build
+# Source code is bind-mounted, so edits apply without rebuilding. Rebuild only
+# when Python dependencies change (pyproject.toml / uv.lock).
+#   frontend  http://localhost:5173  (Vite; proxies /api to the backend)
+#   backend   http://localhost:8000  (Django runserver)
+x-backend: &backend
+  image: shop-backend:dev  # built once, shared by backend/worker/beat
   build:
     context: .
-    dockerfile: docker/Dockerfile
-  env_file: .env.docker
+    dockerfile: docker/backend/Dockerfile
+    target: dev
+  env_file: .env  # all configuration and secrets; see .env.example
   depends_on:
-    db: { condition: service_healthy }
     redis: { condition: service_healthy }
   volumes:
-    - media:/app/media
+    - .:/app
 
 services:
-  db:
-    image: postgres:17-alpine
-    environment:
-      POSTGRES_DB: shop
-      POSTGRES_USER: shop
-      POSTGRES_PASSWORD: shop
-    ports: ["5432:5432"]
-    volumes: [pgdata:/var/lib/postgresql/data]
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U shop"]
-      interval: 5s
-      retries: 10
-
+  # The only backing store: cache (forecasts) and Celery broker.
   redis:
     image: redis:7-alpine
+    ports: ["6379:6379"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       retries: 10
 
-  web:
-    <<: *app
-    environment:
-      RUN_MIGRATIONS: "1"
-    expose: ["8000"]
-    volumes:
-      - media:/app/media
-      - static:/app/staticfiles  # populated from the image, shared with nginx
+  backend:
+    <<: *backend
+    ports: ["8000:8000"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/')"]
       interval: 15s
 
+  # Celery has no auto-reload: watchfiles restarts it when a .py file changes.
   worker:
-    <<: *app
-    command: celery -A config worker -l info --concurrency 2
+    <<: *backend
+    command: python -m watchfiles --filter python "celery -A config worker -l info --concurrency 2" apps config
 
   beat:
-    <<: *app
-    command: celery -A config beat -l info --schedule /tmp/celerybeat-schedule
+    <<: *backend
+    command: python -m watchfiles --filter python "celery -A config beat -l info --schedule /tmp/celerybeat-schedule" apps config
 
-  nginx:
-    image: nginx:1.27-alpine
-    ports: ["8000:80"]
-    depends_on: [web]
+  frontend:
+    image: shop-frontend:dev
+    build:
+      context: frontend
+      target: dev
+    env_file: .env  # GOOGLE_MAPS_API_KEY, BACKEND_URL
+    ports: ["5173:5173"]
     volumes:
-      - ./docker/nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
-      - static:/app/staticfiles:ro
-      - media:/app/media:ro
-
-  mailpit:  # catches all outgoing email: UI at http://localhost:8025
-    image: axllent/mailpit:latest
-    ports: ["8025:8025"]
-
-volumes:
-  pgdata:
-  media:
-  static:
+      - ./frontend:/app
+      - /app/node_modules  # keep the container's node_modules, not the host's
+    depends_on: [backend]

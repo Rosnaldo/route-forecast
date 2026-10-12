@@ -21,7 +21,7 @@ def load_secrets_into_environ() -> None:
     """If AWS_SECRETS_ID is set, copy its JSON keys into os.environ (without
     overriding values already set), so settings read them like any env var.
 
-    Secret example: {"SECRET_KEY": "...", "DATABASE_URL": "postgres://...@rds..."}
+    Secret example: {"SECRET_KEY": "...", "REDIS_URL": "rediss://...cache.amazonaws.com:6379"}
     """
     secret_id = os.getenv("AWS_SECRETS_ID")
     if not secret_id:

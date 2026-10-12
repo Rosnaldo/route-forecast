@@ -25,27 +25,14 @@ jobs:
       - run: uv sync --frozen
       - run: uv run ruff check .
       - run: uv run ruff format --check .
-      - run: uv run python manage.py makemigrations --check --dry-run  # forgot a migration?
-        env:
-          DJANGO_SETTINGS_MODULE: config.settings.test
 
   test:
     runs-on: ubuntu-latest
     services:
-      postgres:
-        image: postgres:17-alpine
-        env:
-          POSTGRES_USER: shop
-          POSTGRES_PASSWORD: shop
-          POSTGRES_DB: shop
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U shop" --health-interval 5s --health-retries 10
       redis:
         image: redis:7-alpine
         ports: ["6379:6379"]
     env:
-      DATABASE_URL: postgres://shop:shop@localhost:5432/shop
       REDIS_URL: redis://localhost:6379
     steps:
       - uses: actions/checkout@v4
@@ -53,15 +40,30 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --frozen
-      - run: uv run pytest --create-db --cov --cov-report=xml --cov-fail-under=85
+      - run: uv run pytest --cov --cov-report=xml --cov-fail-under=85
       - uses: actions/upload-artifact@v4
         with:
           name: coverage
           path: django-test/coverage.xml
 
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: django-test/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: django-test/frontend/package-lock.json
+      - run: npm ci
+      - run: npm run build
+
   # Build on every PR; push to ECR only from main.
   docker:
-    needs: [lint, test]
+    needs: [lint, test, frontend]
     runs-on: ubuntu-latest
     permissions:
       id-token: write  # OIDC federation to AWS: no long-lived access keys in GitHub
@@ -82,7 +84,7 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: django-test
-          file: django-test/docker/Dockerfile
+          file: django-test/docker/backend/Dockerfile
           push: ${{ github.ref == 'refs/heads/main' && vars.AWS_ROLE_ARN != '' }}
           tags: ${{ steps.ecr.outputs.registry }}/shop:${{ github.sha }}
           cache-from: type=gha
