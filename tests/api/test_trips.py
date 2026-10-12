@@ -26,7 +26,9 @@ def _routes_key(settings):
 @pytest.fixture(autouse=True)
 def _no_weather():
     """The weather grid has its own tests (unit/test_weather.py); keep these offline."""
-    grid = WeatherGrid(now=1_800_000_000, start=1_799_998_400, points=[], cells=[])
+    grid = WeatherGrid(
+        now=1_800_000_000, start=1_799_998_400, weight_lb=20_000, points=[], cells=[]
+    )
     with mock.patch("apps.trips.views.weather_grid", return_value=grid) as weather:
         yield weather
 
@@ -57,7 +59,7 @@ def test_route(api_client, _no_weather):
         fake_urlopen(payload) as urlopen,
         mock.patch("apps.trips.views.counties_along", return_value=[denver]) as counties,
     ):
-        response = api_client.post(URL, {"departure": DENVER, "arrival": VAIL})
+        response = api_client.post(URL, {"departure": DENVER, "arrival": VAIL, "weight_lb": 20_000})
 
     assert response.status_code == 200
     assert response.json() == {
@@ -69,12 +71,13 @@ def test_route(api_client, _no_weather):
             "now": 1_800_000_000,
             "start": 1_799_998_400,
             "hours": 48,
+            "weight_lb": 20_000,
             "points": [],
             "cells": [],
         },
     }
     counties.assert_called_once_with(DECODED)
-    assert _no_weather.call_args.args[1] == [denver]
+    assert _no_weather.call_args.args[1:] == ([denver], 20_000)
     sent = json.loads(urlopen.call_args.args[0].data)
     assert sent["origin"]["location"]["latLng"] == {"latitude": 39.7392, "longitude": -104.9903}
     assert sent["travelMode"] == "DRIVE"
@@ -84,7 +87,12 @@ def test_route_from_addresses(api_client):
     payload = {"routes": [{"distanceMeters": 1, "polyline": {"encodedPolyline": ENCODED}}]}
     with fake_urlopen(payload) as urlopen:
         response = api_client.post(
-            URL, {"departure": {"address": "Denver, CO"}, "arrival": {"address": "Vail, CO"}}
+            URL,
+            {
+                "departure": {"address": "Denver, CO"},
+                "arrival": {"address": "Vail, CO"},
+                "weight_lb": 20_000,
+            },
         )
     assert response.status_code == 200
     sent = json.loads(urlopen.call_args.args[0].data)
@@ -97,7 +105,7 @@ def test_route_from_addresses(api_client):
     [{}, {"lat": 39.7}, {"lat": 39.7, "lon": -105.0, "address": "Denver, CO"}, {"address": ""}],
 )
 def test_point_needs_coordinates_or_address(api_client, point):
-    response = api_client.post(URL, {"departure": point, "arrival": VAIL})
+    response = api_client.post(URL, {"departure": point, "arrival": VAIL, "weight_lb": 20_000})
     assert response.status_code == 400
     assert "departure" in response.json()
 
@@ -118,7 +126,7 @@ def test_example_routes(api_client):
 
 def test_no_route_found(api_client):
     with fake_urlopen({}):
-        response = api_client.post(URL, {"departure": DENVER, "arrival": VAIL})
+        response = api_client.post(URL, {"departure": DENVER, "arrival": VAIL, "weight_lb": 20_000})
     assert response.status_code == 400
     assert response.json()["code"] == "domain_error"
 
@@ -126,19 +134,31 @@ def test_no_route_found(api_client):
 def test_google_error_is_bad_gateway(api_client):
     error = urllib.error.HTTPError(URL, 403, "Forbidden", {}, None)
     with mock.patch("apps.trips.routing.urllib.request.urlopen", side_effect=error):
-        response = api_client.post(URL, {"departure": DENVER, "arrival": VAIL})
+        response = api_client.post(URL, {"departure": DENVER, "arrival": VAIL, "weight_lb": 20_000})
     assert response.status_code == 502
     assert response.json() == {"code": "upstream_error", "detail": mock.ANY, "status": 403}
 
 
 def test_missing_key_is_bad_gateway(api_client, settings):
     settings.GOOGLE_ROUTES_API_KEY = ""
-    response = api_client.post(URL, {"departure": DENVER, "arrival": VAIL})
+    response = api_client.post(URL, {"departure": DENVER, "arrival": VAIL, "weight_lb": 20_000})
     assert response.status_code == 502
 
 
+@pytest.mark.parametrize("weight", [None, 999, 100_001, "heavy"])
+def test_weight_is_required_and_in_range(api_client, weight):
+    body = {"departure": DENVER, "arrival": VAIL}
+    if weight is not None:
+        body["weight_lb"] = weight
+    response = api_client.post(URL, body, format="json")
+    assert response.status_code == 400
+    assert "weight_lb" in response.json()
+
+
 def test_invalid_coordinates(api_client):
-    response = api_client.post(URL, {"departure": {"lat": 200, "lon": 0}, "arrival": VAIL})
+    response = api_client.post(
+        URL, {"departure": {"lat": 200, "lon": 0}, "arrival": VAIL, "weight_lb": 20_000}
+    )
     assert response.status_code == 400
 
 

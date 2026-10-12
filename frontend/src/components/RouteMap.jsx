@@ -23,15 +23,17 @@ const timeFormat = new Intl.DateTimeFormat(undefined, {
   minute: "2-digit",
 });
 
-// Forecast at a grid point for the hour the truck gets there, leaving `departureHour` h from now.
+// Forecast at a grid point for the hour the truck gets there, leaving `departureHour` h
+// from now. Levels already account for the cargo weight sent with the request.
 function forecastAt(weather, point, departureHour) {
+  const { levels } = point;
   const eta = weather.now + departureHour * 3600 + point.offset_s;
   const hour = Math.floor((eta - weather.start) / 3600);
-  const inWindow = eta < weather.now + weather.hours * 3600 && point.levels[hour] != null;
+  const inWindow = eta < weather.now + weather.hours * 3600 && levels[hour] != null;
   if (!inWindow) return { eta, level: null };
   return {
     eta,
-    level: point.levels[hour],
+    level: levels[hour],
     wind: point.wind_mph[hour],
     rain: point.rain_in_hr[hour],
     snow: point.snow_in_hr[hour],
@@ -200,33 +202,29 @@ export default function RouteMap({ apiKey, route }) {
   const hoveredCell = hovered == null ? null : weather.cells[hovered];
   return (
     <figure className="route-map">
-      <label className="departure-slider">
-        <span>
-          Departure: <strong>{departureHour === 0 ? "now" : `in ${departureHour} h`}</strong> ·{" "}
-          {timeFormat.format(departure)}
-        </span>
-        <input
-          type="range"
-          min={0}
-          max={weather.hours}
-          step={1}
-          value={departureHour}
-          onChange={(event) => setDepartureHour(Number(event.target.value))}
-          list="departure-ticks"
-        />
-        <datalist id="departure-ticks">
-          {[0, 12, 24, 36, 48].map((hour) => (
-            <option key={hour} value={hour} label={`${hour} h`} />
-          ))}
-        </datalist>
-        <span className="departure-scale" aria-hidden="true">
-          <span>now</span>
-          <span>+12 h</span>
-          <span>+24 h</span>
-          <span>+36 h</span>
-          <span>+48 h</span>
-        </span>
-      </label>
+      <div className="map-controls">
+        <label className="map-slider">
+          <span>
+            Departure: <strong>{departureHour === 0 ? "now" : `in ${departureHour} h`}</strong> ·{" "}
+            {timeFormat.format(departure)}
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={weather.hours}
+            step={1}
+            value={departureHour}
+            onChange={(event) => setDepartureHour(Number(event.target.value))}
+          />
+          <span className="map-slider-scale" aria-hidden="true">
+            <span>now</span>
+            <span>+12 h</span>
+            <span>+24 h</span>
+            <span>+36 h</span>
+            <span>+48 h</span>
+          </span>
+        </label>
+      </div>
       <div
         className="route-map-canvas"
         ref={container}

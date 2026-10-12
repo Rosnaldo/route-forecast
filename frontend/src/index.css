@@ -13,25 +13,85 @@ body {
   background: var(--bg);
   color: var(--fg);
 }
-.container { max-width: 960px; margin: 4rem auto; padding: 0 16px; }
+.container {
+  max-width: 1440px; margin: 0 auto; padding: clamp(16px, 4vw, 48px);
+  box-sizing: border-box;
+}
+h1 { margin-top: 0; }
+
+/* Side by side, the page is exactly one screen tall: the title on top, then the form
+   on the left half and the route result (time slider + map) on the right half, each
+   filling the height left between the title and the page's bottom margin. */
+@media (min-width: 901px) {
+  .container { height: 100vh; display: flex; flex-direction: column; }
+  .workspace {
+    flex: 1; min-height: 0;
+    display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 2rem;
+  }
+  /* A fixed height, so both tab panels get the same space whichever is open. */
+  .workspace > .trip-form { height: 100%; min-height: 0; }
+  .workspace > .route-result { max-height: 100%; overflow-y: auto; margin-top: 0; }
+}
+/* Stacked: form first, then the result; both tab panels get the same fixed height. */
+@media (max-width: 900px) {
+  .workspace .tab-panel { flex: none; height: 50vh; }
+}
 h1 { font-weight: 800; }
 a { color: var(--accent); }
 
-.trip-form { display: grid; gap: 1.5rem; }
+.tab-list {
+  display: flex; gap: 0.25rem; margin-bottom: 1.25rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--muted) 40%, transparent);
+}
+.tab {
+  font: inherit; font-weight: 700; color: var(--muted); background: none; cursor: pointer;
+  border: 0; border-bottom: 3px solid transparent; margin-bottom: -1px; padding: 0.5rem 1rem;
+}
+.tab:hover { color: var(--fg); }
+.tab[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--accent); }
+.tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 4px; }
+/* Tabs fill the form's leftover height; a long panel (the examples table) scrolls inside. */
+.tabs { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.tab-panel { display: flex; flex-direction: column; min-height: 0; flex: 1; overflow-y: auto; }
+.tab-panel[hidden] { display: none; }
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.trip-form { display: flex; flex-direction: column; gap: 1.5rem; }
+.place-fields { display: grid; gap: 1.5rem; }
+.form-actions { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+.form-actions .place-selected { margin: 0; }
+.submit {
+  font: inherit; font-weight: 700; color: #fff; background: var(--accent);
+  border: 0; border-radius: 6px; padding: 0.65rem 1.5rem; cursor: pointer;
+}
+.submit:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 85%, #000); }
+.submit:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.submit:disabled { opacity: 0.5; cursor: not-allowed; }
 .place-label { display: block; font-weight: 700; margin-bottom: 0.5rem; }
 .place-input gmp-place-autocomplete { width: 100%; color-scheme: light dark; }
+.weight-field input { width: 100%; margin: 0; accent-color: var(--accent); }
 .place-selected { margin: 0.5rem 0 0; color: var(--muted); font-size: 0.9rem; min-height: 1.2em; }
 .notice { padding: 0.75rem 1rem; border-left: 4px solid var(--accent); }
 .route-summary { margin-top: 1.5rem; font-weight: 700; }
-.county-list { color: var(--muted); padding-left: 1.5rem; columns: 2; }
+.county-list {
+  color: var(--muted); columns: 2; column-gap: 2rem;
+  margin: 1.5rem 1rem; padding-left: 1.5rem; line-height: 1.6;
+}
 
 .route-map { margin: 0 0 1.5rem; }
-.departure-slider { display: grid; gap: 0.25rem; margin-bottom: 0.75rem; font-size: 0.9rem; }
-.departure-slider input { width: 100%; accent-color: var(--accent); }
-.departure-scale {
+.map-controls {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 0.75rem 2rem; margin-bottom: 0.75rem;
+}
+.map-slider { display: grid; gap: 0.25rem; font-size: 0.9rem; }
+.map-slider input { width: 100%; margin: 0; accent-color: var(--accent); }
+.map-slider-scale {
   display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--muted);
 }
-.route-map-canvas { height: 420px; border-radius: 8px; overflow: hidden; }
+.route-map-canvas { height: clamp(320px, 60vh, 640px); border-radius: 8px; overflow: hidden; }
 .route-map-legend {
   display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1.25rem;
   margin-top: 0.75rem; font-size: 0.85rem; color: var(--muted);
@@ -47,10 +107,11 @@ a { color: var(--accent); }
 .route-result { margin-top: 2rem; scroll-margin-top: 1rem; }
 .route-title { font-size: 1.25rem; margin: 0 0 0.25rem; }
 
-.examples { margin-top: 2.5rem; overflow-x: auto; }
+.examples { overflow: auto; min-height: 0; flex: 1; }
 .examples-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 .examples-table caption { text-align: left; font-weight: 700; margin-bottom: 0.5rem; }
 .examples-table th {
+  position: sticky; top: 0; z-index: 1; background: var(--bg); /* header stays while rows scroll */
   text-align: left; color: var(--muted); font-weight: 600;
   border-bottom: 1px solid color-mix(in srgb, var(--muted) 40%, transparent);
   padding: 0.5rem;
@@ -60,7 +121,6 @@ a { color: var(--accent); }
   border-bottom: 1px solid color-mix(in srgb, var(--muted) 20%, transparent);
 }
 .examples-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.examples-table .purpose { color: var(--muted); }
 .examples-table tbody tr { cursor: pointer; }
 .examples-table tbody tr:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .examples-table tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }

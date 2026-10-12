@@ -46,8 +46,10 @@ def fake_open_meteo(**values):
 
 
 def test_forecast_level_is_worst_condition():
-    assert Forecast(wind_mph=30, rain_in_hr=0, snow_in_hr=1.5).level == RiskLevel.HIGH
-    assert Forecast(wind_mph=0, rain_in_hr=0, snow_in_hr=0).level == RiskLevel.LOW
+    forecast = Forecast(wind_mph=40, rain_in_hr=0, snow_in_hr=0.6)
+    assert forecast.level() == RiskLevel.HIGH
+    assert forecast.level(45_000) == RiskLevel.SEVERE  # 35-44 mph over 40,000 lb
+    assert Forecast(wind_mph=0, rain_in_hr=0, snow_in_hr=0).level() == RiskLevel.LOW
 
 
 def test_grid_pieces_split_on_county_borders():
@@ -86,19 +88,26 @@ def test_series_from_older_cached_data():
     assert _series({"time": []}, START) == [None] * (FORECAST_HOURS + 1)
 
 
-def test_weather_grid_classifies_each_hour():
+def test_weather_grid_classifies_each_hour_for_the_weight():
     with fake_open_meteo(wind=40) as urlopen:
-        grid = weather_grid(ROUTE, [SQUARE], now=NOW)
+        grid = weather_grid(ROUTE, [SQUARE], 45_000, now=NOW)
     assert urlopen.call_count == 1
-    assert (grid.now, grid.start) == (NOW, START)
+    assert (grid.now, grid.start, grid.weight_lb) == (NOW, START, 45_000)
     assert len(grid.points) == len(grid.cells) == 4
     assert {cell.county for cell in grid.cells} == {SQUARE}
     point = grid.points[0]
-    assert point.levels == [RiskLevel.HIGH] * (FORECAST_HOURS + 1)
+    # 40 mph wind is High, Severe over 40,000 lb.
+    assert point.levels == [RiskLevel.SEVERE] * (FORECAST_HOURS + 1)
     assert point.wind_mph[0] == 40
     # West cells are passed after a quarter of the trip, east ones after three quarters.
     assert sorted({p.offset_s for p in grid.points}) == [3600, 3 * 3600]
     assert grid.cells[0].outline()["type"] == "Polygon"
+
+
+def test_weather_grid_light_load():
+    with fake_open_meteo(wind=40):
+        grid = weather_grid(ROUTE, [SQUARE], 20_000, now=NOW)
+    assert set(grid.points[0].levels) == {RiskLevel.HIGH}
 
 
 def test_weather_grid_caches_forecasts():

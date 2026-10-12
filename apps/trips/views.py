@@ -11,6 +11,8 @@ from .routing import compute_route
 from .weather import FORECAST_HOURS, weather_grid
 
 EXAMPLE_ROUTES_FILE = settings.BASE_DIR / "example_routes.csv"
+WEIGHT_MIN_LB = 1_000  # cargo weight accepted by the route endpoint
+WEIGHT_MAX_LB = 100_000
 
 
 class PointSerializer(serializers.Serializer):
@@ -33,6 +35,7 @@ class PointSerializer(serializers.Serializer):
 class RouteRequestSerializer(serializers.Serializer):
     departure = PointSerializer()
     arrival = PointSerializer()
+    weight_lb = serializers.FloatField(min_value=WEIGHT_MIN_LB, max_value=WEIGHT_MAX_LB)
 
 
 class CountySerializer(serializers.Serializer):
@@ -66,6 +69,7 @@ class WeatherGridSerializer(serializers.Serializer):
     now = serializers.IntegerField()
     start = serializers.IntegerField()
     hours = serializers.SerializerMethodField()
+    weight_lb = serializers.FloatField()
     points = GridPointSerializer(many=True)
     cells = WeatherCellSerializer(many=True)
 
@@ -83,16 +87,21 @@ class RouteResponseSerializer(serializers.Serializer):
 
 class RouteView(APIView):
     """Driving route between departure and arrival: [lat, lon] points, counties crossed,
-    and the hourly weather risk for the next FORECAST_HOURS on a grid over those counties."""
+    and the hourly weather risk for the next FORECAST_HOURS on a grid over those counties,
+    for a truck carrying `weight_lb` of cargo."""
 
     serializer_class = RouteRequestSerializer
 
     def post(self, request: Request, version: str) -> Response:
         params = RouteRequestSerializer(data=request.data)
         params.is_valid(raise_exception=True)
-        route = compute_route(params.validated_data["departure"], params.validated_data["arrival"])
+        departure, arrival, weight_lb = (
+            params.validated_data[key] for key in ("departure", "arrival", "weight_lb")
+        )
+        route = compute_route(departure, arrival)
         counties = counties_along(route.points)
-        data = {**vars(route), "counties": counties, "weather": weather_grid(route, counties)}
+        weather = weather_grid(route, counties, weight_lb)
+        data = {**vars(route), "counties": counties, "weather": weather}
         return Response(RouteResponseSerializer(data).data)
 
 

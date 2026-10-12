@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 // Sample trips from example_routes.csv (served by the backend). Clicking a row
-// calls onSelect(example) to request that route.
+// calls onSelect(example) to pick it; the form's Submit requests the route.
 export default function ExampleRoutes({ selectedId, onSelect }) {
   const [examples, setExamples] = useState([]);
   const [error, setError] = useState(null);
@@ -28,14 +28,13 @@ export default function ExampleRoutes({ selectedId, onSelect }) {
   return (
     <div className="examples">
       <table className="examples-table">
-        <caption>Example routes: click one to compute it</caption>
+        <caption className="visually-hidden">Example routes: pick one, then Submit</caption>
         <thead>
           <tr>
             <th scope="col">#</th>
             <th scope="col">Departure</th>
             <th scope="col">Arrival</th>
             <th scope="col" className="num">Expected</th>
-            <th scope="col">What it tests</th>
           </tr>
         </thead>
         <tbody>
@@ -52,7 +51,6 @@ export default function ExampleRoutes({ selectedId, onSelect }) {
               <td>{example.departure}</td>
               <td>{example.arrival}</td>
               <td className="num">{example.distance_km.toLocaleString()} km</td>
-              <td className="purpose">{example.purpose}</td>
             </tr>
           ))}
         </tbody>

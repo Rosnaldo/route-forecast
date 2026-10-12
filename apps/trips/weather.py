@@ -50,14 +50,14 @@ class Forecast:
     rain_in_hr: float
     snow_in_hr: float
 
-    @property
-    def level(self) -> RiskLevel:
+    def level(self, weight_lb: float = 0) -> RiskLevel:
         return overall(
             {
                 Condition.WIND: self.wind_mph,
                 Condition.RAIN: self.rain_in_hr,
                 Condition.SNOW: self.snow_in_hr,
-            }
+            },
+            weight_lb,
         )
 
 
@@ -70,6 +70,7 @@ class GridPoint:
     lon: float
     offset_s: int  # seconds after departure the truck passes nearest to here
     hours: list[Forecast | None]
+    weight_lb: float  # cargo weight the levels are for
 
     @property
     def wind_mph(self) -> list[float | None]:
@@ -85,7 +86,8 @@ class GridPoint:
 
     @property
     def levels(self) -> list[RiskLevel | None]:
-        return [f and f.level for f in self.hours]
+        """Hourly risk level for the cargo weight."""
+        return [f and f.level(self.weight_lb) for f in self.hours]
 
 
 @dataclass(frozen=True)
@@ -103,17 +105,21 @@ class Cell:
 class WeatherGrid:
     now: int  # unix time the grid was made; departure offsets count from here
     start: int  # unix time of hour 0 in the series (the start of the current hour)
+    weight_lb: float
     points: list[GridPoint]
     cells: list[Cell]
 
 
-def weather_grid(route: Route, counties: list[County], now: float | None = None) -> WeatherGrid:
-    """Grid over `counties` with each center's hourly forecast and risk level."""
+def weather_grid(
+    route: Route, counties: list[County], weight_lb: float = 0, now: float | None = None
+) -> WeatherGrid:
+    """Grid over `counties` with each center's hourly forecast and risk level for a truck
+    carrying `weight_lb` of cargo."""
     now = int(time.time() if now is None else now)
     start = now - now % 3600
     counties = [county for county in counties if county.geometry is not None]
     if not counties or not route.points:
-        return WeatherGrid(now, start, [], [])
+        return WeatherGrid(now, start, weight_lb, [], [])
 
     step = GRID_STEP
     pieces = _grid_pieces(counties, step)
@@ -130,12 +136,13 @@ def weather_grid(route: Route, counties: list[County], now: float | None = None)
             lon,
             round(_offset_s(line, (lat, lon), route.duration_s)),
             _series(hourly[(lat, lon)], start),
+            weight_lb,
         )
         for lat, lon in centers
     ]
     index = {center: i for i, center in enumerate(centers)}
     cells = [Cell(index[center], county, piece) for center, county, piece in pieces]
-    return WeatherGrid(now, start, points, cells)
+    return WeatherGrid(now, start, weight_lb, points, cells)
 
 
 def _grid_pieces(counties: list[County], step: float):

@@ -66,3 +66,39 @@ def test_overall_is_the_worst_condition():
 def test_levels_are_ordered_and_labelled():
     assert LOW < MODERATE < HIGH < SEVERE < NO_TRAVEL
     assert NO_TRAVEL.label == "No Travel"
+
+
+@pytest.mark.parametrize(
+    ("mph", "weight_lb", "level"),
+    [
+        # >= 55 mph: No Travel for any load
+        (55, 1_000, NO_TRAVEL),
+        (70, 100_000, NO_TRAVEL),
+        # 45-54 mph: No Travel over 30,000 lb, else the table's Severe
+        (45, 30_000, SEVERE),  # needs more than 30,000
+        (45, 30_001, NO_TRAVEL),
+        (54.9, 35_000, NO_TRAVEL),
+        (54.9, 10_000, SEVERE),
+        # 35-44 mph: Severe over 40,000 lb, else the table's High
+        (35, 40_000, HIGH),  # needs more than 40,000
+        (35, 40_001, SEVERE),
+        (44.9, 100_000, SEVERE),
+        (40, 35_000, HIGH),
+        # below 35 mph weight does not matter
+        (34.9, 100_000, MODERATE),
+        (10, 100_000, LOW),
+    ],
+)
+def test_wind_with_load_weight(mph, weight_lb, level):
+    assert classify(Condition.WIND, mph, weight_lb) is level
+
+
+def test_load_weight_does_not_change_rain_or_snow():
+    assert classify(Condition.RAIN, 0.30, 100_000) is HIGH
+    assert classify(Condition.SNOW, 0.6, 100_000) is MODERATE
+
+
+def test_overall_with_load_weight():
+    values = {Condition.WIND: 40, Condition.SNOW: 0.6}
+    assert overall(values) is HIGH
+    assert overall(values, 45_000) is SEVERE
