@@ -21,6 +21,7 @@ class CountySerializer(serializers.Serializer):
     fips = serializers.CharField()
     name = serializers.CharField()
     state = serializers.CharField()
+    geometry = serializers.JSONField(source="outline", allow_null=True)
 
 
 class RouteResponseSerializer(serializers.Serializer):

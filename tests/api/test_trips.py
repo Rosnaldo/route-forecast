@@ -55,7 +55,7 @@ def test_route(api_client):
         "distance_m": 158000,
         "duration_s": 6300,
         "points": [list(p) for p in DECODED],
-        "counties": [{"fips": "08031", "name": "Denver", "state": "CO"}],
+        "counties": [{"fips": "08031", "name": "Denver", "state": "CO", "geometry": None}],
     }
     counties.assert_called_once_with(DECODED)
     sent = json.loads(urlopen.call_args.args[0].data)
@@ -117,3 +117,10 @@ def test_counties_along_single_point():
 def test_counties_along_empty_and_offshore():
     assert counties_along([]) == []
     assert counties_along([(30.0, -40.0), (31.0, -41.0)]) == []  # mid-Atlantic
+
+
+def test_county_outline_is_simplified_geojson():
+    (denver,) = counties_along([(39.7392, -104.9903)])
+    outline = denver.outline()
+    assert outline["type"] in ("Polygon", "MultiPolygon")
+    assert len(str(outline)) < len(str(denver.geometry.__geo_interface__))

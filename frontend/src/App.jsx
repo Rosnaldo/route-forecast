@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import PlaceInput from "./components/PlaceInput.jsx";
+import RouteMap from "./components/RouteMap.jsx";
 
 const apiKey = __GOOGLE_MAPS_API_KEY__;
 
@@ -13,7 +14,7 @@ function Selection({ place }) {
   );
 }
 
-function RouteSummary({ route, error }) {
+function RouteSummary({ apiKey, route, error }) {
   if (error) return <p className="notice">{error}</p>;
   if (!route) return null;
   const km = (route.distance_m / 1000).toFixed(0);
@@ -24,6 +25,7 @@ function RouteSummary({ route, error }) {
       <p className="route-summary">
         {km} km · {hours} h {minutes} min · {route.counties.length} counties
       </p>
+      <RouteMap apiKey={apiKey} route={route} />
       <ol className="county-list">
         {route.counties.map((county) => (
           <li key={county.fips}>
@@ -82,7 +84,7 @@ export default function App() {
               <Selection place={destination} />
             </div>
           </form>
-          <RouteSummary route={route} error={routeError} />
+          <RouteSummary apiKey={apiKey} route={route} error={routeError} />
         </>
       ) : (
         <p className="notice">
