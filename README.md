@@ -11,3 +11,5 @@ route.
 
 - Region: contiguous United States
 - Forecast window: 48 hours
+- Weather factors: wind mph; rain in/hr; snow in/hr
+
