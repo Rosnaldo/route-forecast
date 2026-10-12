@@ -22,3 +22,5 @@ a { color: var(--accent); }
 .place-input gmp-place-autocomplete { width: 100%; color-scheme: light dark; }
 .place-selected { margin: 0.5rem 0 0; color: var(--muted); font-size: 0.9rem; min-height: 1.2em; }
 .notice { padding: 0.75rem 1rem; border-left: 4px solid var(--accent); }
+.route-summary { margin-top: 1.5rem; font-weight: 700; }
+.county-list { color: var(--muted); padding-left: 1.5rem; columns: 2; }

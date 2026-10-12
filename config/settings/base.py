@@ -36,6 +36,7 @@ THIRD_PARTY_APPS = [
 ]
 LOCAL_APPS = [
     "apps.core",
+    "apps.trips",
 ]
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
@@ -95,6 +96,10 @@ CACHES = {
         "LOCATION": f"{REDIS_URL}/1",
     }
 }
+
+# ------------------------------------------------------------------- google maps
+# Server key for the Routes API (restrict by IP, not HTTP referrer).
+GOOGLE_ROUTES_API_KEY = env("GOOGLE_ROUTES_API_KEY", default="")
 
 # ----------------------------------------------------------------- REST framework
 REST_FRAMEWORK = {

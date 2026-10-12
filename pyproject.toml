@@ -17,6 +17,8 @@ dependencies = [
     "whitenoise>=6.9",
     "boto3>=1.37",
     "django-storages[s3]>=1.14",
+    "shapely>=2.0",
+    "pyshp>=2.3",
 ]
 
 [dependency-groups]

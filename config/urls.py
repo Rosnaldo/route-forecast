@@ -8,7 +8,9 @@ from apps.core import views as core_views
 # Every API route lives under /api/<version>/; URLPathVersioning reads `version`
 # from the URL kwargs and exposes it as `request.version`.
 # Add each domain app here: path("", include("apps.<name>.urls")),
-api_patterns: list = []
+api_patterns: list = [
+    path("", include("apps.trips.urls")),
+]
 
 urlpatterns = [
     path("", core_views.home, name="home"),

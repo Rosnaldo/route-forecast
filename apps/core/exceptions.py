@@ -30,3 +30,10 @@ class ConflictError(DomainError):
 class PermissionDeniedError(DomainError):
     status_code = HTTPStatus.FORBIDDEN
     code = "permission_denied"
+
+
+class UpstreamError(DomainError):
+    """A third-party service (Google, NWS, ...) failed or returned nothing usable."""
+
+    status_code = HTTPStatus.BAD_GATEWAY
+    code = "upstream_error"
