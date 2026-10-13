@@ -3,13 +3,22 @@ from unittest import mock
 import pytest
 
 from apps.core.exceptions import UpstreamError
-from apps.trips.routing import MAX_ROUTES, Route, _overlap, _side_point, compute_routes
+from apps.trips.routing import (
+    MAX_ROUTES,
+    Point,
+    Route,
+    Step,
+    _overlap,
+    _side_point,
+    compute_routes,
+    haversine_m,
+)
 
 # Routes from (0, 0) to (0, 1), (lat, lon): straight east, and bowing north or south.
-MAIN = Route(100_000, 3600, [(0.0, 0.0), (0.0, 0.5), (0.0, 1.0)], "Main")
-NORTH = Route(120_000, 4000, [(0.0, 0.0), (0.3, 0.5), (0.0, 1.0)], "North")
-SOUTH = Route(120_000, 4000, [(0.0, 0.0), (-0.3, 0.5), (0.0, 1.0)], "South")
-FAR_NORTH = Route(150_000, 5000, [(0.0, 0.0), (0.6, 0.5), (0.0, 1.0)], "Far north")
+MAIN = Route(100_000, 3600, [Point(0.0, 0.0), Point(0.0, 0.5), Point(0.0, 1.0)], "Main")
+NORTH = Route(120_000, 4000, [Point(0.0, 0.0), Point(0.3, 0.5), Point(0.0, 1.0)], "North")
+SOUTH = Route(120_000, 4000, [Point(0.0, 0.0), Point(-0.3, 0.5), Point(0.0, 1.0)], "South")
+FAR_NORTH = Route(150_000, 5000, [Point(0.0, 0.0), Point(0.6, 0.5), Point(0.0, 1.0)], "Far north")
 
 
 @pytest.fixture(autouse=True)
@@ -92,3 +101,17 @@ def test_side_point_is_left_of_the_direction_of_travel():
 def test_overlap():
     assert _overlap(MAIN, MAIN) == pytest.approx(1)
     assert _overlap(NORTH, MAIN) < 0.1
+
+
+def test_route_length_along_its_points():
+    # One degree of longitude on the equator, in two halves.
+    assert MAIN.length_m() == pytest.approx(haversine_m(0, 0, 0, 1))
+    assert haversine_m(0, 0, 0, 1) == pytest.approx(111_195, abs=1)
+
+
+def test_point_and_step_are_named_tuples():
+    point = Point(39.74, -104.99)
+    lat, lon = point  # still unpacks like the old (lat, lon) tuple
+    assert (lat, lon) == (point.lat, point.lon) == (39.74, -104.99)
+    assert Step(1000, 40).speed_mps == 25
+    assert Step(1000, 0).speed_mps is None  # no time: no speed

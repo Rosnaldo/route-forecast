@@ -1,13 +1,15 @@
 import io
 import json
 import urllib.error
+from datetime import UTC, datetime, timedelta
 from unittest import mock
 
 import pytest
 
+from apps.trips.checkpoints import Trip, load_trip, save_trip
 from apps.trips.counties import County, counties_along
-from apps.trips.routing import Route, decode_polyline
-from apps.trips.weather import WeatherGrid
+from apps.trips.routing import Point, Route, Step, decode_polyline
+from apps.trips.weather import Forecast, WeatherGrid
 
 URL = "/api/v1/trips/route/"
 DENVER = {"lat": 39.7392, "lon": -104.9903}
@@ -28,7 +30,9 @@ def _no_weather():
     """The weather grid has its own tests (unit/test_weather.py); keep these offline."""
 
     def grid(routes, weight_lb):
-        return WeatherGrid(1_800_000_000, 1_799_998_400, weight_lb, [], [], [[] for _ in routes])
+        return WeatherGrid(
+            1_800_000_000, 1_799_998_400, weight_lb, 0.2, [], [], [[] for _ in routes]
+        )
 
     with mock.patch("apps.trips.views.weather_grid", side_effect=grid) as weather:
         yield weather
@@ -43,7 +47,9 @@ def fake_urlopen(payload):
 
 
 def test_decode_polyline():
-    assert decode_polyline(ENCODED) == DECODED
+    points = decode_polyline(ENCODED)
+    assert points == DECODED
+    assert points[0].lat == 38.5 and points[0].lon == -120.2
 
 
 def test_route(api_client, _no_weather):
@@ -54,6 +60,14 @@ def test_route(api_client, _no_weather):
                 "duration": "6300s",
                 "polyline": {"encodedPolyline": ENCODED},
                 "description": "I-70 W",
+                "legs": [
+                    {
+                        "steps": [
+                            {"distanceMeters": 1000, "staticDuration": "120s"},
+                            {"distanceMeters": 157000, "staticDuration": "6180s"},
+                        ]
+                    }
+                ],
             },
             {
                 "distanceMeters": 170000,
@@ -75,6 +89,13 @@ def test_route(api_client, _no_weather):
 
     assert response.status_code == 200
     body = response.json()
+    # The trip is kept for the checkpoints endpoint.
+    trip = load_trip(body["trip_id"])
+    assert [r.description for r in trip.routes] == ["I-70 W", "US-6 W"]
+    assert (trip.weight_lb, trip.step) == (20_000, 0.2)
+    assert trip.routes[0].steps == (Step(1000, 120), Step(157000, 6180))  # for travel times
+    assert isinstance(trip.routes[0].points[0], Point)
+    assert trip.routes[1].steps == ()
     assert [
         (r["description"], r["distance_m"], r["duration_s"], r["counties"]) for r in body["routes"]
     ] == [
@@ -104,7 +125,7 @@ def test_route(api_client, _no_weather):
 
 
 def test_display_points_are_simplified():
-    straight = Route(1, 1, [(39.0, -105.0 + i * 0.001) for i in range(1000)])
+    straight = Route(1, 1, [Point(39.0, -105.0 + i * 0.001) for i in range(1000)])
     assert straight.display_points() == [(39.0, -105.0), (39.0, -104.001)]
     assert Route(1, 1, DECODED[:2]).display_points() == DECODED[:2]
 
@@ -223,3 +244,68 @@ def test_county_outline_is_simplified_geojson():
     outline = denver.outline()
     assert outline["type"] in ("Polygon", "MultiPolygon")
     assert len(str(outline)) < len(str(denver.geometry.__geo_interface__))
+
+
+CHECKPOINTS_URL = "/api/v1/trips/checkpoints/"
+
+
+def checkpoints_body(trip_id, **overrides):
+    departure = datetime.now(UTC) + timedelta(hours=2)
+    return {"trip_id": trip_id, "distance_mi": 25, "departure": departure.isoformat()} | overrides
+
+
+def test_checkpoints(api_client):
+    trip_id = save_trip(
+        Trip([Route(111_195, 7200, [Point(0.0, 0.0), Point(0.0, 1.0)])], 20_000, 0.2)
+    )
+    hours = [Forecast(12, 0.05, 0)] * 49
+    with mock.patch(
+        "apps.trips.checkpoints.hourly_forecasts",
+        side_effect=lambda centers, start: dict.fromkeys(centers, hours),
+    ):
+        response = api_client.post(CHECKPOINTS_URL, checkpoints_body(trip_id), format="json")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["distance_mi"] == 25
+    (route,) = body["routes"]
+    assert [round(c["elapsed_s"] / 60) for c in route] == [
+        24,
+        48,
+        67,
+    ]  # no steps: fallback 100 km/h
+    assert [c["is_arrival"] for c in route] == [False, False, True]
+    assert route[0] | {"lat": 0, "lon": 0, "distance_m": 0, "eta": 0} == {
+        "lat": 0,
+        "lon": 0,
+        "distance_m": 0,
+        "elapsed_s": route[0]["elapsed_s"],
+        "breaks": 0,
+        "eta": 0,
+        "wind_mph": 12,
+        "rain_in_hr": 0.05,
+        "snow_in_hr": 0,
+        "level": 0,
+        "is_arrival": False,
+    }
+
+
+def test_checkpoints_for_an_unknown_trip(api_client):
+    response = api_client.post(CHECKPOINTS_URL, checkpoints_body("missing"), format="json")
+    assert response.status_code == 404
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"distance_mi": 30},
+        {"departure": "2020-01-01T00:00:00Z"},
+        {"departure": (datetime.now(UTC) + timedelta(hours=49)).isoformat()},
+        {"trip_id": ""},
+    ],
+)
+def test_checkpoints_validation(api_client, overrides):
+    body = checkpoints_body("x") | overrides
+    response = api_client.post(CHECKPOINTS_URL, body, format="json")
+    assert response.status_code == 400
+    assert response.json().keys() == {next(iter(overrides))}

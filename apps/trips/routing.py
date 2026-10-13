@@ -10,12 +10,14 @@ encoded polyline; we decode it to a list of (lat, lon) points, which later steps
 (counties, weather) walk along.
 """
 
+import itertools
 import json
 import math
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from typing import NamedTuple
 
 from django.conf import settings
 from shapely import LineString
@@ -25,9 +27,19 @@ from apps.core.exceptions import DomainError, UpstreamError
 ROUTES_URL = "https://routes.googleapis.com/directions/v2:computeRoutes"
 FIELD_MASK = ",".join(
     f"routes.{field}"
-    for field in ("distanceMeters", "duration", "polyline.encodedPolyline", "description")
+    for field in (
+        "distanceMeters",
+        "duration",
+        "polyline.encodedPolyline",
+        "description",
+        # Per-step distance and time: the speed profile for travel times (timing.py).
+        "legs.steps.distanceMeters",
+        "legs.steps.staticDuration",
+    )
 )
 TIMEOUT_SECONDS = 10
+EARTH_RADIUS_M = 6_371_008.8
+
 # Line detail sent to the map: ~50 m simplification, 5 decimals (~1 m).
 DISPLAY_TOLERANCE = 0.0005
 DISPLAY_DECIMALS = 5
@@ -44,6 +56,25 @@ MAX_SLOWDOWN = 3
 DETOUR_OFFSETS = (0.15, -0.15, 0.3, -0.3)
 
 
+class Point(NamedTuple):
+    """A position on a route. Still a (lat, lon) tuple: `lat, lon = point` works."""
+
+    lat: float
+    lon: float
+
+
+class Step(NamedTuple):
+    """One of Google's route steps (a street or highway section, maneuver to maneuver)."""
+
+    distance_m: int
+    duration_s: int  # Google's estimate, without traffic
+
+    @property
+    def speed_mps(self) -> float | None:
+        """Google's speed for the step; None when it gives no time."""
+        return self.distance_m / self.duration_s if self.duration_s else None
+
+
 # A route end: (lat, lon) coordinates, or an address/place name Google geocodes.
 Waypoint = tuple[float, float] | str
 
@@ -52,17 +83,24 @@ Waypoint = tuple[float, float] | str
 class Route:
     distance_m: int
     duration_s: int
-    points: list[tuple[float, float]]  # (lat, lon), departure first
+    points: list[Point]  # departure first
     description: str = ""  # main roads, e.g. "I-80 E"
     source: str = "google"  # "google", or the fallback: "avoid_highways" / "detour"
+    # Google's steps in order: street by street, highway by highway; their speeds
+    # shape the travel times (see timing.py).
+    steps: tuple[Step, ...] = ()
 
-    def display_points(self) -> list[tuple[float, float]]:
+    def length_m(self) -> float:
+        """Length along the points (great-circle), which travel times are based on."""
+        return sum(haversine_m(*a, *b) for a, b in itertools.pairwise(self.points))
+
+    def display_points(self) -> list[Point]:
         """The route simplified for drawing: a cross-country route has ~17,000 points."""
         if len(self.points) < 3:
             return self.points
         simplified = LineString(self.points).simplify(DISPLAY_TOLERANCE)
         return [
-            (round(lat, DISPLAY_DECIMALS), round(lon, DISPLAY_DECIMALS))
+            Point(round(lat, DISPLAY_DECIMALS), round(lon, DISPLAY_DECIMALS))
             for lat, lon in simplified.coords
         ]
 
@@ -115,6 +153,13 @@ def _request(origin: Waypoint, destination: Waypoint, source="google", **options
             points=decode_polyline(route["polyline"]["encodedPolyline"]),
             description=route.get("description", ""),
             source=source,
+            steps=tuple(
+                Step(
+                    step.get("distanceMeters", 0), int(step.get("staticDuration", "0s").rstrip("s"))
+                )
+                for leg in route.get("legs", [])
+                for step in leg.get("steps", [])
+            ),
         )
         for route in data.get("routes", [])
     ]
@@ -156,15 +201,13 @@ def _fallbacks(origin: Waypoint, destination: Waypoint, routes: list[Route]) -> 
     return kept[len(routes) :]
 
 
-def _side_point(
-    start: tuple[float, float], end: tuple[float, float], k: float
-) -> tuple[float, float]:
+def _side_point(start: Point, end: Point, k: float) -> Point:
     """The point `k` trip-lengths to the left of the start-end line's midpoint
     (right for negative k), measured in locally scaled degrees."""
     scale = math.cos(math.radians((start[0] + end[0]) / 2))  # lon degrees are shorter
     dx, dy = (end[1] - start[1]) * scale, end[0] - start[0]
     mid_lat, mid_lon = (start[0] + end[0]) / 2, (start[1] + end[1]) / 2
-    return mid_lat + k * dx, mid_lon - k * dy / scale
+    return Point(mid_lat + k * dx, mid_lon - k * dy / scale)
 
 
 def _overlap(route: Route, other: Route) -> float:
@@ -174,6 +217,14 @@ def _overlap(route: Route, other: Route) -> float:
     return line.intersection(along).length / line.length if line.length else 1.0
 
 
+def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance in meters."""
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp, dl = p2 - p1, math.radians(lon2 - lon1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * EARTH_RADIUS_M * math.asin(math.sqrt(a))
+
+
 def _waypoint(point: Waypoint) -> dict:
     if isinstance(point, str):
         return {"address": point}
@@ -181,14 +232,14 @@ def _waypoint(point: Waypoint) -> dict:
     return {"location": {"latLng": {"latitude": lat, "longitude": lon}}}
 
 
-def decode_polyline(encoded: str, precision: int = 5) -> list[tuple[float, float]]:
+def decode_polyline(encoded: str, precision: int = 5) -> list[Point]:
     """Decode Google's encoded polyline format into (lat, lon) pairs.
 
     Each coordinate is a delta from the previous one, zigzag-encoded and split
     into 5-bit chunks offset by 63 (see Google's "Encoded Polyline Algorithm").
     """
     factor = 10**precision
-    points: list[tuple[float, float]] = []
+    points: list[Point] = []
     index = lat = lon = 0
     while index < len(encoded):
         deltas = []
@@ -204,5 +255,5 @@ def decode_polyline(encoded: str, precision: int = 5) -> list[tuple[float, float
             deltas.append(~(result >> 1) if result & 1 else result >> 1)
         lat += deltas[0]
         lon += deltas[1]
-        points.append((lat / factor, lon / factor))
+        points.append(Point(lat / factor, lon / factor))
     return points

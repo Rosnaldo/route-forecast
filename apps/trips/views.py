@@ -1,4 +1,5 @@
 import csv
+import time
 
 from django.conf import settings
 from rest_framework import serializers
@@ -6,6 +7,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from .checkpoints import Trip, load_trip, save_trip, trip_checkpoints
 from .counties import counties_along
 from .routing import compute_routes
 from .weather import FORECAST_HOURS, weather_grid
@@ -87,7 +89,7 @@ class RouteCellSerializer(serializers.Serializer):
 
 class RouteSerializer(serializers.Serializer):
     distance_m = serializers.IntegerField()
-    duration_s = serializers.IntegerField()
+    duration_s = serializers.IntegerField()  # Google's car drive time; ETAs: timing.py
     description = serializers.CharField()
     source = serializers.CharField()  # "google", or a fallback: "avoid_highways" / "detour"
     points = serializers.ListField(  # [lat, lon], simplified for drawing
@@ -98,6 +100,7 @@ class RouteSerializer(serializers.Serializer):
 
 
 class RouteResponseSerializer(serializers.Serializer):
+    trip_id = serializers.CharField()  # for the checkpoints endpoint, valid for an hour
     routes = RouteSerializer(many=True)  # fastest first
     counties = CountySerializer(many=True)  # every county any route crosses, once
     weather = WeatherGridSerializer()
@@ -120,7 +123,9 @@ class RouteView(APIView):
         routes = compute_routes(departure, arrival)
         counties = [counties_along(route.points) for route in routes]
         weather = weather_grid(list(zip(routes, counties, strict=True)), weight_lb)
+        trip_id = save_trip(Trip(routes, weight_lb, weather.step))
         data = {
+            "trip_id": trip_id,
             "routes": [
                 {
                     **vars(route),
@@ -136,6 +141,60 @@ class RouteView(APIView):
             "weather": weather,
         }
         return Response(RouteResponseSerializer(data).data)
+
+
+class CheckpointsRequestSerializer(serializers.Serializer):
+    trip_id = serializers.CharField(max_length=64)  # from the route endpoint
+    distance_mi = serializers.ChoiceField(choices=[10, 25, 50])  # gap between checkpoints
+    departure = serializers.DateTimeField()  # within the forecast window
+
+    def validate_departure(self, value):
+        now = time.time()
+        # An hour of slack: the form computes the time from when the routes loaded.
+        if not now - 3600 <= value.timestamp() <= now + FORECAST_HOURS * 3600:
+            raise serializers.ValidationError(
+                f"Departure must be within the next {FORECAST_HOURS} hours."
+            )
+        return value
+
+
+class CheckpointSerializer(serializers.Serializer):
+    lat = serializers.FloatField()
+    lon = serializers.FloatField()
+    distance_m = serializers.IntegerField()  # along the route, from departure
+    elapsed_s = serializers.IntegerField()  # expected travel time from departure
+    breaks = serializers.IntegerField()  # 30-min driver breaks included in elapsed_s
+    eta = serializers.IntegerField()  # unix time
+    wind_mph = serializers.FloatField(source="forecast.wind_mph", allow_null=True, default=None)
+    rain_in_hr = serializers.FloatField(source="forecast.rain_in_hr", allow_null=True, default=None)
+    snow_in_hr = serializers.FloatField(source="forecast.snow_in_hr", allow_null=True, default=None)
+    level = serializers.IntegerField(allow_null=True)  # risk level; null beyond the window
+    is_arrival = serializers.BooleanField()
+
+
+class CheckpointsResponseSerializer(serializers.Serializer):
+    distance_mi = serializers.IntegerField()
+    departure = serializers.DateTimeField()
+    routes = serializers.ListField(child=CheckpointSerializer(many=True))  # route order
+
+
+class CheckpointsView(APIView):
+    """Checkpoints every `distance_mi` miles along each route of a computed trip, with
+    the expected travel time to each and the weather risk when the truck gets there,
+    leaving at `departure`."""
+
+    serializer_class = CheckpointsRequestSerializer
+
+    def post(self, request: Request, version: str) -> Response:
+        params = CheckpointsRequestSerializer(data=request.data)
+        params.is_valid(raise_exception=True)
+        trip_id, distance_mi, departure = (
+            params.validated_data[key] for key in ("trip_id", "distance_mi", "departure")
+        )
+        trip = load_trip(trip_id)
+        checkpoints = trip_checkpoints(trip, distance_mi, departure.timestamp())
+        data = {"distance_mi": distance_mi, "departure": departure, "routes": checkpoints}
+        return Response(CheckpointsResponseSerializer(data).data)
 
 
 class ExampleRoutesView(APIView):

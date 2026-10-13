@@ -10,7 +10,8 @@ from shapely import box
 from apps.core.exceptions import UpstreamError
 from apps.trips.counties import County
 from apps.trips.risk import RiskLevel
-from apps.trips.routing import Route
+from apps.trips.routing import Point, Route
+from apps.trips.timing import TravelTimes
 from apps.trips.weather import FORECAST_HOURS, Forecast, _grid_pieces, _series, weather_grid
 
 START = 1_800_000_000 - 1_800_000_000 % 3600  # on the hour
@@ -20,7 +21,9 @@ HOURS = [START + h * 3600 for h in range(FORECAST_HOURS + 2)]
 # A square 0.4 x 0.4 degree "county": a 2 x 2 block of 0.2-degree grid cells.
 SQUARE = County("99001", "Square", "ZZ", box(-105.0, 39.0, -104.6, 39.4))
 # West to east across the middle of the square, 4 hours end to end.
-ROUTE = Route(distance_m=35_000, duration_s=4 * 3600, points=[(39.2, -105.0), (39.2, -104.6)])
+ROUTE = Route(
+    distance_m=35_000, duration_s=4 * 3600, points=[Point(39.2, -105.0), Point(39.2, -104.6)]
+)
 
 
 def hourly(wind=0.0, rain=0.0, snow=0.0):
@@ -99,10 +102,15 @@ def test_weather_grid_classifies_each_hour_for_the_weight():
     # 40 mph wind is High, Severe over 40,000 lb.
     assert point.levels == [RiskLevel.SEVERE] * (FORECAST_HOURS + 1)
     assert point.wind_mph[0] == 40
-    # West cells are passed after a quarter of the trip, east ones after three quarters.
+    # West cells are passed a quarter of the way along, east ones three quarters, at the
+    # fallback speed (no steps; Google's 4 h duration is not used): 34.5 km at 100 km/h.
     (route_cells,) = grid.route_cells
     assert sorted(rc.cell for rc in route_cells) == [0, 1, 2, 3]
-    assert sorted({rc.offset_s for rc in route_cells}) == [3600, 3 * 3600]
+    length, times = ROUTE.length_m(), TravelTimes(ROUTE)
+    assert sorted({rc.offset_s for rc in route_cells}) == [
+        times.elapsed_s(length / 4),
+        times.elapsed_s(length * 3 / 4),
+    ]
     assert grid.cells[0].outline()["type"] == "Polygon"
 
 
@@ -144,7 +152,8 @@ def test_routes_share_cells_and_fetches():
         {grid.cells[rc.cell].point: rc.offset_s for rc in cells} for cells in grid.route_cells
     )
     assert there.keys() == back_again.keys()
-    assert all(there[p] + back_again[p] == 4 * 3600 for p in there)
+    total = TravelTimes(ROUTE).elapsed_s(ROUTE.length_m())
+    assert all(abs(there[p] + back_again[p] - total) <= 1 for p in there)
 
 
 @pytest.mark.parametrize(

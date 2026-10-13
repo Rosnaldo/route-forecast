@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 
+import DistanceDepartureForm from "./components/DistanceDepartureForm.jsx";
 import ExampleRoutes from "./components/ExampleRoutes.jsx";
 import PlaceInput from "./components/PlaceInput.jsx";
+import Stepper from "./components/Stepper.jsx";
 import Tabs from "./components/Tabs.jsx";
 import TripResult from "./components/TripResult.jsx";
 import { WEIGHT_DEFAULT, WEIGHT_MAX, WEIGHT_MIN, WEIGHT_STEP, pounds } from "./lib/load.js";
@@ -100,6 +102,13 @@ export default function App() {
   const [data, setData] = useState(null); // the endpoint's response: routes and weather
   const [loading, setLoading] = useState(false);
   const [routeError, setRouteError] = useState(null);
+  const [step, setStep] = useState(0); // 0: route form, 1: distance & departure form
+  // Departure in hours from now; set in the second form, drives the map's heat map.
+  const [departureHour, setDepartureHour] = useState(0);
+  // Checkpoints from the second endpoint, for the departure they were requested with.
+  const [checkpoints, setCheckpoints] = useState(null);
+  const [checkpointsLoading, setCheckpointsLoading] = useState(false);
+  const [checkpointsError, setCheckpointsError] = useState(null);
   const result = useRef(null);
 
   const draft = tripFrom(tab, { origin, destination, example });
@@ -134,7 +143,10 @@ export default function App() {
         const data = await response.json();
         if (!response.ok) throw new Error(data.detail ?? JSON.stringify(data));
         setData(data);
+        setDepartureHour(0); // new forecasts: start from leaving now
+        setCheckpoints(null);
         setLoading(false);
+        setStep(1); // the routes are in: on to the second form
       })
       .catch((err) => {
         if (err.name === "AbortError") return;
@@ -145,6 +157,38 @@ export default function App() {
 
     return () => controller.abort();
   }, [trip]);
+
+  // Moving the departure makes shown checkpoints stale: clear them.
+  const changeDeparture = (hours) => {
+    setDepartureHour(hours);
+    setCheckpoints(null);
+    setCheckpointsError(null);
+  };
+
+  // Second form: checkpoints every distanceMi miles along each route, leaving at departure.
+  const submitDistanceDeparture = ({ distanceMi, departure }) => {
+    setCheckpointsLoading(true);
+    setCheckpointsError(null);
+    fetch("/api/v1/trips/checkpoints/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        trip_id: data.trip_id,
+        distance_mi: distanceMi,
+        departure: departure.toISOString(),
+      }),
+    })
+      .then(async (response) => {
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.detail ?? JSON.stringify(body));
+        setCheckpoints(body);
+      })
+      .catch((err) => {
+        setCheckpoints(null);
+        setCheckpointsError(err.message);
+      })
+      .finally(() => setCheckpointsLoading(false));
+  };
 
   if (!apiKey) {
     return (
@@ -162,51 +206,86 @@ export default function App() {
       <h1>Trip weather</h1>
 
       <div className="workspace">
-        <form className="trip-form" onSubmit={submit}>
-          <Tabs
-            label="Choose the trip"
-            active={tab}
-            onChange={setTab}
-            tabs={[
-              {
-                id: "customize",
-                label: "Customize",
-                content: (
-                  <div className="place-fields">
-                    <div className="place-field">
-                      <PlaceInput apiKey={apiKey} label="Departure" onSelect={setOrigin} />
-                      <Selection place={origin} />
-                    </div>
-                    <div className="place-field">
-                      <PlaceInput apiKey={apiKey} label="Arrival" onSelect={setDestination} />
-                      <Selection place={destination} />
-                    </div>
-                  </div>
-                ),
-              },
-              {
-                id: "examples",
-                label: "Examples",
-                content: <ExampleRoutes selectedId={example?.id} onSelect={setExample} />,
-              },
-            ]}
-          />
+        <Stepper
+          label="Trip steps"
+          active={step}
+          onChange={setStep}
+          steps={[
+            {
+              id: "route",
+              label: "Route",
+              content: (
+              <form className="trip-form" onSubmit={submit}>
+                <Tabs
+                  label="Choose the trip"
+                  active={tab}
+                  onChange={setTab}
+                  tabs={[
+                    {
+                      id: "customize",
+                      label: "Customize",
+                      content: (
+                        <div className="place-fields">
+                          <div className="place-field">
+                            <PlaceInput apiKey={apiKey} label="Departure" onSelect={setOrigin} />
+                            <Selection place={origin} />
+                          </div>
+                          <div className="place-field">
+                            <PlaceInput apiKey={apiKey} label="Arrival" onSelect={setDestination} />
+                            <Selection place={destination} />
+                          </div>
+                        </div>
+                      ),
+                    },
+                    {
+                      id: "examples",
+                      label: "Examples",
+                      content: <ExampleRoutes selectedId={example?.id} onSelect={setExample} />,
+                    },
+                  ]}
+                />
 
-          <WeightInput weightLb={weightLb} onChange={setWeightLb} />
+                <WeightInput weightLb={weightLb} onChange={setWeightLb} />
 
-          <div className="form-actions">
-            <button type="submit" className="submit" disabled={!draft || loading}>
-              {loading ? "Calculating…" : "Submit"}
-            </button>
-            {!draft && <span className="place-selected">{MISSING[tab]}</span>}
-          </div>
-        </form>
+                <div className="form-actions">
+                  <button type="submit" className="submit" disabled={!draft || loading}>
+                    {loading ? "Calculating…" : "Submit"}
+                  </button>
+                  {!draft && <span className="place-selected">{MISSING[tab]}</span>}
+                </div>
+              </form>
+              ),
+            },
+            {
+              id: "distance-departure",
+              label: "Distance & departure",
+              disabled: !data, // reached by submitting the first form
+              content: data && (
+                <DistanceDepartureForm
+                  weather={data.weather}
+                  departureHour={departureHour}
+                  onDepartureChange={changeDeparture}
+                  loading={checkpointsLoading}
+                  error={checkpointsError}
+                  checkpoints={checkpoints}
+                  onBack={() => setStep(0)}
+                  onSubmit={submitDistanceDeparture}
+                />
+              ),
+            },
+          ]}
+        />
 
         <section ref={result} className="route-result">
           <RouteSummary trip={trip} data={data} loading={loading} error={routeError} />
           {data ? (
-            // A new response starts fresh, with departure now.
-            <TripResult key={trip.id} apiKey={apiKey} data={data} />
+            <TripResult
+              key={trip.id}
+              apiKey={apiKey}
+              data={data}
+              departureHour={departureHour}
+              checkpoints={checkpoints}
+            />
           ) : (
             !trip && (
               <p className="place-selected">

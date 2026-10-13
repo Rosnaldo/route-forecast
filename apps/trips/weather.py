@@ -4,8 +4,8 @@ Weather risk on a grid over the counties a route crosses, via Open-Meteo.
 The counties each route crosses are covered by a fixed lat/lon grid. Each cell's
 center gets the hourly forecast for the whole window, classified hour by hour
 with the rules in risk.py. Each route's cells also carry how long after
-departure the truck passes nearest to their center (at that route's average
-speed); the client picks a departure time and reads each center's risk for the
+departure the truck passes nearest to their center (route speeds and breaks, see
+timing.py); the client picks a departure time and reads each center's risk for the
 hour the truck gets there. Cells are clipped to each county outline, so a cell
 on a border is split into one piece per county; the pieces share the center's
 forecast. Routes share the grid, so a center on several routes is fetched once.
@@ -34,6 +34,7 @@ from apps.core.exceptions import UpstreamError
 from .counties import DISPLAY_GRID, DISPLAY_TOLERANCE, County
 from .risk import Condition, RiskLevel, overall
 from .routing import Route
+from .timing import TravelTimes
 
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 TIMEOUT_SECONDS = 15
@@ -112,6 +113,7 @@ class WeatherGrid:
     now: int  # unix time the grid was made; departure offsets count from here
     start: int  # unix time of hour 0 in the series (the start of the current hour)
     weight_lb: float
+    step: float  # cell size in degrees (coarser than GRID_STEP on long trips)
     points: list[GridPoint]
     cells: list[Cell]  # each once, however many routes cross it
     route_cells: list[list[RouteCell]]  # per route, in the order given
@@ -149,6 +151,8 @@ def weather_grid(
         line = (
             LineString([(lon, lat) for lat, lon in route.points]) if len(route.points) > 1 else None
         )
+        length_m = route.length_m()
+        times = TravelTimes(route)
         offsets = {}
         this_route = []
         for center, county, piece in route_pieces:
@@ -157,10 +161,28 @@ def weather_grid(
                 cell_index[key] = len(cells)
                 cells.append(Cell(point_index[center], county, piece))
             if center not in offsets:
-                offsets[center] = round(_offset_s(line, center, route.duration_s))
+                offsets[center] = _offset_s(line, center, length_m, times)
             this_route.append(RouteCell(cell_index[key], offsets[center]))
         route_cells.append(this_route)
-    return WeatherGrid(now, start, weight_lb, points, cells, route_cells)
+    return WeatherGrid(now, start, weight_lb, step, points, cells, route_cells)
+
+
+def grid_center(lat: float, lon: float, step: float) -> tuple[float, float]:
+    """Center (lat, lon) of the grid cell of size `step` that contains (lat, lon)."""
+    return _center(math.floor(lat / step), math.floor(lon / step), step)
+
+
+def _center(i: int, j: int, step: float) -> tuple[float, float]:
+    return round((i + 0.5) * step, 4), round((j + 0.5) * step, 4)
+
+
+def hourly_forecasts(
+    centers: list[tuple[float, float]], start: int
+) -> dict[tuple[float, float], list[Forecast | None]]:
+    """Hourly forecasts from `start` for grid cell centers (cached like the grid's)."""
+    centers = sorted(set(centers))
+    hourly = _fetch(centers)
+    return {center: _series(hourly[center], start) for center in centers}
 
 
 def _grid_pieces(counties: list[County], step: float):
@@ -174,7 +196,7 @@ def _grid_pieces(counties: list[County], step: float):
                 piece = cell.intersection(county.geometry)
                 if piece.area < cell.area * 1e-6:  # nothing, or a float-rounding sliver
                     continue
-                center = (round((i + 0.5) * step, 4), round((j + 0.5) * step, 4))
+                center = _center(i, j, step)
                 pieces.append((center, county, piece))
     return pieces
 
@@ -183,12 +205,14 @@ def _cell_count(pieces_per_route) -> int:
     return len({center for pieces in pieces_per_route for center, _, _ in pieces})
 
 
-def _offset_s(line: LineString | None, center: tuple[float, float], duration_s: int) -> float:
-    """Seconds after departure the truck is nearest to `center`, at constant speed."""
+def _offset_s(
+    line: LineString | None, center: tuple[float, float], length_m: float, times: TravelTimes
+) -> int:
+    """Seconds after departure the truck is nearest to `center` (see timing.py)."""
     if line is None or line.length == 0:
         return 0
     lat, lon = center
-    return line.project(Point(lon, lat), normalized=True) * duration_s
+    return times.elapsed_s(line.project(Point(lon, lat), normalized=True) * length_m)
 
 
 def _fetch(centers) -> dict[tuple[float, float], dict]:

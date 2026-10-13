@@ -11,5 +11,6 @@ route.
 
 - Region: contiguous United States
 - Forecast window: 48 hours
-- Weather factors: wind mph; rain in/hr; snow in/hr
-
+- Weather factors: wind (mph); rain (in/hr); snow (in/hr)
+- 30-minute stop after every 8 hours of driving.
+- velocity 100 km/h used as fallback
