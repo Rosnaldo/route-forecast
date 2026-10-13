@@ -1,22 +1,11 @@
 # Development stack with hot reload: docker compose up --build
 # Source code is bind-mounted, so edits apply without rebuilding. Rebuild only
 # when Python dependencies change (pyproject.toml / uv.lock).
+#   nginx     https://$BASE_DOMAIN  (nginx/.env.dev; mkcert certificates, see nginx/README.md)
 #   frontend  http://localhost:5173  (Vite; proxies /api to the backend)
 #   backend   http://localhost:8000  (Django runserver)
-x-backend: &backend
-  image: shop-backend:dev  # built once, shared by backend/worker/beat
-  build:
-    context: .
-    dockerfile: docker/backend/Dockerfile
-    target: dev
-  env_file: .env  # all configuration and secrets; see .env.example
-  depends_on:
-    redis: { condition: service_healthy }
-  volumes:
-    - .:/app
-
 services:
-  # The only backing store: cache (forecasts) and Celery broker.
+  # The only backing store: cache (forecasts).
   redis:
     image: redis:7-alpine
     ports: ["6379:6379"]
@@ -26,29 +15,45 @@ services:
       retries: 10
 
   backend:
-    <<: *backend
+    image: shop-backend:dev
+    build:
+      context: .
+      dockerfile: docker/backend/Dockerfile
+      target: dev
+    env_file: .env  # all configuration and secrets; see .env.example
+    depends_on:
+      redis: { condition: service_healthy }
+    volumes:
+      - .:/app
     ports: ["8000:8000"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/')"]
       interval: 15s
-
-  # Celery has no auto-reload: watchfiles restarts it when a .py file changes.
-  worker:
-    <<: *backend
-    command: python -m watchfiles --filter python "celery -A config worker -l info --concurrency 2" apps config
-
-  beat:
-    <<: *backend
-    command: python -m watchfiles --filter python "celery -A config beat -l info --schedule /tmp/celerybeat-schedule" apps config
 
   frontend:
     image: shop-frontend:dev
     build:
       context: frontend
       target: dev
-    env_file: .env  # GOOGLE_MAPS_API_KEY, BACKEND_URL
+    env_file:
+      - .env  # GOOGLE_MAPS_API_KEY, BACKEND_URL
+      - nginx/.env.dev  # BASE_DOMAIN: a host Vite accepts requests for
     ports: ["5173:5173"]
     volumes:
       - ./frontend:/app
       - /app/node_modules  # keep the container's node_modules, not the host's
     depends_on: [backend]
+
+  # HTTPS in front of both, as in production: /api/, /static/, /health/ go to Django,
+  # the rest to Vite (hot reload included). ${BASE_DOMAIN} in the template comes from
+  # nginx/.env.dev.
+  nginx:
+    image: nginx:1.27-alpine
+    env_file: nginx/.env.dev
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./nginx/dev/nginx.conf:/etc/nginx/templates/default.conf.template:ro
+      - ./nginx/dev/certs:/etc/nginx/certs:ro
+    depends_on:
+      backend: { condition: service_healthy }
+      frontend: { condition: service_started }

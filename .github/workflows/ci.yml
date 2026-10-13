@@ -61,31 +61,17 @@ jobs:
       - run: npm ci
       - run: npm run build
 
-  # Build on every PR; push to ECR only from main.
+  # The production image must build on every change.
   docker:
     needs: [lint, test, frontend]
     runs-on: ubuntu-latest
-    permissions:
-      id-token: write  # OIDC federation to AWS: no long-lived access keys in GitHub
-      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
-      - name: Configure AWS credentials
-        if: github.ref == 'refs/heads/main' && vars.AWS_ROLE_ARN != ''
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION }}
-      - name: Login to ECR
-        id: ecr
-        if: github.ref == 'refs/heads/main' && vars.AWS_ROLE_ARN != ''
-        uses: aws-actions/amazon-ecr-login@v2
       - uses: docker/build-push-action@v6
         with:
           context: django-test
           file: django-test/docker/backend/Dockerfile
-          push: ${{ github.ref == 'refs/heads/main' && vars.AWS_ROLE_ARN != '' }}
-          tags: ${{ steps.ecr.outputs.registry }}/shop:${{ github.sha }}
+          push: false
           cache-from: type=gha
           cache-to: type=gha,mode=max

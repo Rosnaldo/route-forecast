@@ -11,6 +11,8 @@ from pathlib import Path
 import environ
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
+# Django's own pages (templates, CSS) live with the rest of the frontend.
+FRONTEND_DJANGO_DIR = BASE_DIR / "frontend" / "django"
 
 env = environ.Env(
     DEBUG=(bool, False),
@@ -32,16 +34,20 @@ THIRD_PARTY_APPS = [
     "rest_framework",
     "django_filters",
     "drf_spectacular",
-    "storages",
 ]
 LOCAL_APPS = [
     "apps.core",
+    "apps.trips",
 ]
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
 # Order matters: each middleware wraps the ones below it (onion model).
 MIDDLEWARE = [
     "apps.core.middleware.RequestIDMiddleware",
+    # Before anything that reads or writes the body: compresses responses (route
+    # responses are ~1 MB of coordinates and shrink several times), event streams
+    # event by event.
+    "apps.core.middleware.GZipMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -57,7 +63,7 @@ ASGI_APPLICATION = "config.asgi.application"
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [BASE_DIR / "templates"],
+        "DIRS": [FRONTEND_DJANGO_DIR / "templates"],
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [
@@ -79,7 +85,7 @@ USE_TZ = True
 # ---------------------------------------------------------------- static & media
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"  # `collectstatic` target, served by nginx/whitenoise
-STATICFILES_DIRS = [BASE_DIR / "static"]
+STATICFILES_DIRS = [FRONTEND_DJANGO_DIR / "static"]
 MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"
 STORAGES = {
@@ -95,6 +101,10 @@ CACHES = {
         "LOCATION": f"{REDIS_URL}/1",
     }
 }
+
+# ------------------------------------------------------------------- google maps
+# Server key for the Routes API (restrict by IP, not HTTP referrer).
+GOOGLE_ROUTES_API_KEY = env("GOOGLE_ROUTES_API_KEY", default="")
 
 # ----------------------------------------------------------------- REST framework
 REST_FRAMEWORK = {
@@ -127,16 +137,6 @@ SPECTACULAR_SETTINGS = {
     "VERSION": "1.0.0",
     "SERVE_INCLUDE_SCHEMA": False,
 }
-
-# ------------------------------------------------------------------------- celery
-CELERY_BROKER_URL = env("CELERY_BROKER_URL", default=f"{REDIS_URL}/0")
-CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", default=f"{REDIS_URL}/0")
-CELERY_TASK_ACKS_LATE = True  # re-deliver if a worker dies mid-task (tasks must be idempotent)
-CELERY_WORKER_PREFETCH_MULTIPLIER = 1
-CELERY_TASK_TIME_LIMIT = 5 * 60
-CELERY_TASK_SOFT_TIME_LIMIT = 4 * 60
-CELERY_TIMEZONE = TIME_ZONE
-CELERY_BEAT_SCHEDULE: dict = {}  # periodic tasks: {"name": {"task": "...", "schedule": seconds}}
 
 # ------------------------------------------------------------------------ logging
 LOG_LEVEL = env("LOG_LEVEL", default="INFO")

@@ -1,0 +1,103 @@
+# Production stack:  docker compose -f docker-compose.prod.yml up -d --build
+#
+# Only nginx is published: nginx-http (80) answers Let's Encrypt's challenge and
+# redirects to HTTPS; nginx-https (443) terminates TLS, proxies /api/, /static/ and
+# /health/ to Django and serves the React bundle itself (it runs the frontend image).
+# Redis and the backend are reachable only inside the stack.
+#
+# On the first deploy nginx-https restarts until `certbot` has obtained the certificate
+# (nginx/README.md); later deploys find it in nginx/prod/letsencrypt.
+#
+# Configuration comes from `.env` next to this file (see .env.example): it is read by
+# the containers (env_file) and for the ${...} values below. nginx and certbot read
+# nginx/.env.prod (BASE_DOMAIN, ADMIN_EMAIL).
+services:
+  # Cache (forecasts, trips). Nothing worth keeping on disk; when full, it evicts the
+  # keys closest to expiring anyway (volatile-lru).
+  redis:
+    image: redis:7-alpine
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - ${REDIS_MAXMEMORY:-256mb}
+      - --maxmemory-policy
+      - volatile-lru
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 10
+
+  backend:
+    image: shop-backend:prod
+    build:
+      context: .
+      dockerfile: docker/backend/Dockerfile
+      target: runtime  # DJANGO_SETTINGS_MODULE=config.settings.prod
+    env_file: .env
+    restart: unless-stopped
+    depends_on:
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/')"]
+      interval: 15s
+      start_period: 20s
+
+  # Port 80: Let's Encrypt's HTTP challenge (files written by certbot) and the
+  # redirect to HTTPS.
+  nginx-http:
+    image: nginx:1.27-alpine
+    env_file: nginx/.env.prod
+    ports: ["80:80"]
+    restart: unless-stopped
+    volumes:
+      - ./nginx/prod/http/nginx.conf:/etc/nginx/templates/default.conf.template:ro
+      - ./nginx/prod/certbot:/var/www/certbot:ro
+
+  # Port 443: TLS, then Django and the React app. Needs the certificate from `certbot`.
+  # The frontend image is nginx with the built bundle in /usr/share/nginx/html.
+  nginx-https:
+    image: shop-frontend:prod
+    build:
+      context: frontend
+      target: runtime
+      args:
+        # Browser key, baked into the bundle (public by nature; restrict it by referrer).
+        GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY:-}
+    env_file: nginx/.env.prod
+    ports: ["443:443"]
+    restart: unless-stopped
+    volumes:
+      - ./nginx/prod/https/nginx.conf:/etc/nginx/templates/default.conf.template:ro
+      - ./nginx/prod/letsencrypt:/etc/letsencrypt:ro
+    depends_on:
+      backend: { condition: service_healthy }
+      nginx-http: { condition: service_started }
+    # Reloads every 6h so renewed certificates (see certbot-renew) are picked up. The
+    # image's entrypoint is called by hand: it is what fills the template.
+    command: /bin/sh -c 'while :; do sleep 6h & wait $${!}; nginx -s reload; done & exec /docker-entrypoint.sh nginx -g "daemon off;"'
+
+  # One-shot: obtains (or expands to include www) the certificate, then exits.
+  certbot:
+    image: certbot/certbot:v2.11.0
+    env_file: nginx/.env.prod
+    volumes:
+      - ./nginx/prod/certbot:/var/www/certbot
+      - ./nginx/prod/letsencrypt:/etc/letsencrypt
+    depends_on: [nginx-http]
+    entrypoint: /bin/sh -c 'certbot certonly --non-interactive --agree-tos --keep-until-expiring --expand -m $$ADMIN_EMAIL --webroot -w /var/www/certbot -d $$BASE_DOMAIN -d www.$$BASE_DOMAIN'
+
+  # Long-running: renews the certificate every 12h (certbot no-ops until it's within
+  # 30 days of expiry); nginx-https reloads on its own 6h loop.
+  certbot-renew:
+    image: certbot/certbot:v2.11.0
+    restart: unless-stopped
+    volumes:
+      - ./nginx/prod/certbot:/var/www/certbot
+      - ./nginx/prod/letsencrypt:/etc/letsencrypt
+    depends_on: [nginx-https]
+    entrypoint: /bin/sh -c 'trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot; sleep 12h & wait $${!}; done'

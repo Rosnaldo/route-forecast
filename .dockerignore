@@ -1,5 +1,9 @@
 .venv
-frontend
+# The React app has its own image; only Django's own pages are needed here.
+frontend/*
+!frontend/django
+# nginx configs and certificates (private keys) stay out of the backend image.
+nginx
 .git
 **/__pycache__
 .env

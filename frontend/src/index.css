@@ -13,12 +13,267 @@ body {
   background: var(--bg);
   color: var(--fg);
 }
-.container { max-width: 720px; margin: 4rem auto; padding: 0 16px; }
+/* Scroll panes (tab panels, result pane, tables): thin, muted scrollbars that follow the
+   theme and turn accent on hover. */
+:root {
+  color-scheme: light dark;
+  --scrollbar-thumb: color-mix(in srgb, var(--muted) 45%, transparent);
+  --scrollbar-thumb-hover: color-mix(in srgb, var(--accent) 70%, transparent);
+}
+.tab-panel, .route-result, .examples, .miles {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+.tab-panel:hover, .route-result:hover, .examples:hover, .miles:hover {
+  scrollbar-color: var(--scrollbar-thumb-hover) transparent;
+}
+/* Browsers without scrollbar-color (older Safari). */
+@supports not (scrollbar-color: auto) {
+  :is(.tab-panel, .route-result, .examples, .miles)::-webkit-scrollbar { width: 8px; height: 8px; }
+  :is(.tab-panel, .route-result, .examples, .miles)::-webkit-scrollbar-track { background: transparent; }
+  :is(.tab-panel, .route-result, .examples, .miles)::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb); border-radius: 4px;
+  }
+  :is(.tab-panel, .route-result, .examples, .miles)::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-thumb-hover);
+  }
+}
+.container {
+  max-width: 1440px; margin: 0 auto; padding: clamp(16px, 4vw, 48px);
+  box-sizing: border-box;
+}
+h1 { margin-top: 0; }
+
+/* Side by side, the page is exactly one screen tall: the title on top, then the form
+   on the left half and the route result (time slider + map) on the right half, each
+   filling the height left between the title and the page's bottom margin. */
+@media (min-width: 901px) {
+  .container { height: 100vh; display: flex; flex-direction: column; }
+  .workspace {
+    flex: 1; min-height: 0;
+    display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 2rem;
+  }
+  /* A fixed height, so both tab panels get the same space whichever is open. */
+  .workspace > .stepper { height: 100%; min-height: 0; }
+  .workspace > .route-result {
+    height: 100%; overflow-y: auto; margin-top: 0; display: flex; flex-direction: column;
+  }
+  .workspace > .route-result > * { flex: none; }
+  /* The map fills what the summary, slider and route cards leave, so it fits on screen;
+     the county list comes after it, reached by scrolling the pane. */
+  .workspace > .route-result > .route-map {
+    flex: 1 0 0; min-height: 360px; display: flex; flex-direction: column;
+  }
+  /* Takes no height in the layout, so the map can fill the screen; it overflows below
+     the map, which still scrolls into view. */
+  .workspace > .route-result > .county-lists { flex: 0 0 0; min-height: 0; }
+  /* Margins don't count when overflowing, so pad the end to keep space below. */
+  .workspace > .route-result > .county-lists .county-list { padding-bottom: 1.5rem; }
+  .workspace .route-map-canvas { flex: 1; height: auto; min-height: 260px; }
+}
+/* Stacked: form first, then the result; both tab panels get the same fixed height. */
+@media (max-width: 900px) {
+  .workspace .tab-panel { flex: none; height: 50vh; }
+}
 h1 { font-weight: 800; }
 a { color: var(--accent); }
 
-.trip-form { display: grid; gap: 1.5rem; }
+.tab-list {
+  display: flex; gap: 0.25rem; margin-bottom: 1.25rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--muted) 40%, transparent);
+}
+.tab {
+  font: inherit; font-weight: 700; color: var(--muted); background: none; cursor: pointer;
+  border: 0; border-bottom: 3px solid transparent; margin-bottom: -1px; padding: 0.5rem 1rem;
+}
+.tab:hover { color: var(--fg); }
+.tab[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--accent); }
+.tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 4px; }
+/* Tabs fill the form's leftover height; a long panel (the examples table) scrolls inside. */
+.tabs { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.tab-panel { display: flex; flex-direction: column; min-height: 0; flex: 1; overflow-y: auto; }
+.tab-panel[hidden] { display: none; }
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Stepper: numbered step header, then the active step's form filling the rest. */
+.stepper { display: flex; flex-direction: column; gap: 1.25rem; }
+.stepper-header {
+  display: flex; gap: 0.5rem; list-style: none; margin: 0; padding: 0; counter-reset: none;
+}
+.stepper-step { display: flex; align-items: center; flex: 1; gap: 0.5rem; }
+/* Connector line between steps. */
+.stepper-step:not(:last-child)::after {
+  content: ""; flex: 1; height: 2px; border-radius: 1px;
+  background: color-mix(in srgb, var(--muted) 30%, transparent);
+}
+.stepper-step.done:not(:last-child)::after { background: var(--accent); }
+.stepper-button {
+  display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.25rem;
+  font: inherit; font-weight: 700; color: var(--muted); background: none; border: 0;
+  border-radius: 6px; cursor: pointer; white-space: nowrap;
+}
+.stepper-button:disabled { cursor: not-allowed; opacity: 0.6; }
+.stepper-button:focus-visible { outline: 2px solid var(--accent); }
+.stepper-step.current .stepper-button { color: var(--fg); }
+.stepper-number {
+  display: inline-grid; place-items: center; width: 1.75rem; height: 1.75rem;
+  border-radius: 50%; font-size: 0.85rem;
+  border: 2px solid color-mix(in srgb, var(--muted) 45%, transparent);
+}
+.stepper-step.current .stepper-number { border-color: var(--accent); color: var(--accent); }
+.stepper-step.done .stepper-number {
+  border-color: var(--accent); background: var(--accent); color: var(--bg);
+}
+/* Narrow screens: only the current step keeps its label visible (others: number only). */
+@media (max-width: 600px) {
+  .stepper-step:not(.current) .stepper-label {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+.stepper-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.stepper-panel[hidden] { display: none; }
+.stepper-panel > .trip-form { flex: 1; min-height: 0; }
+
+.trip-form { display: flex; flex-direction: column; gap: 1.5rem; }
+.choice-field { border: 0; margin: 0; padding: 0; min-width: 0; }
+.choice-options { display: flex; flex-wrap: wrap; gap: 0.75rem; }
+.choice {
+  display: inline-flex; align-items: center; gap: 0.5rem; cursor: pointer;
+  padding: 0.6rem 1rem; border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--muted) 35%, transparent);
+}
+.choice:has(input:checked) {
+  border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.choice input { accent-color: var(--accent); margin: 0; }
+.link-button {
+  font: inherit; font-weight: 700; color: var(--accent); background: none; border: 0;
+  padding: 0; cursor: pointer; text-decoration: underline;
+}
+.map-slider input:disabled { opacity: 0.5; cursor: not-allowed; }
+.secondary {
+  font: inherit; font-weight: 700; color: var(--fg); background: none; cursor: pointer;
+  border: 1px solid color-mix(in srgb, var(--muted) 45%, transparent);
+  border-radius: 6px; padding: 0.65rem 1.5rem;
+}
+.secondary:hover { border-color: var(--accent); }
+.secondary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Customize tab: compact labels, inputs and spacing. */
+.place-fields { display: grid; gap: 0.75rem; }
+.place-fields .place-label { font-size: 0.85rem; margin-bottom: 0.3rem; }
+/* Google's element ignores font-size; its height can be reduced. */
+.place-fields gmp-place-autocomplete { height: 38px; }
+.place-fields .place-selected { margin-top: 0.25rem; font-size: 0.8rem; }
+.form-actions { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+.form-actions .place-selected { margin: 0; }
+.submit {
+  font: inherit; font-weight: 700; color: #fff; background: var(--accent);
+  border: 0; border-radius: 6px; padding: 0.65rem 1.5rem; cursor: pointer;
+}
+.submit:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 85%, #000); }
+.submit:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.submit:disabled { opacity: 0.5; cursor: not-allowed; }
 .place-label { display: block; font-weight: 700; margin-bottom: 0.5rem; }
 .place-input gmp-place-autocomplete { width: 100%; color-scheme: light dark; }
+.weight-field input { width: 100%; margin: 0; accent-color: var(--accent); }
 .place-selected { margin: 0.5rem 0 0; color: var(--muted); font-size: 0.9rem; min-height: 1.2em; }
 .notice { padding: 0.75rem 1rem; border-left: 4px solid var(--accent); }
+.route-summary { margin-top: 1.5rem; font-weight: 700; }
+.county-lists { margin: 1.5rem 1rem 0; }
+/* The route tabs here size to their list (the form's tabs fill a fixed height). */
+.county-lists .tabs, .county-lists .tab-panel { flex: none; height: auto; overflow: visible; }
+.county-lists .tab-list { margin-bottom: 0.75rem; }
+.county-lists .tab { display: inline-flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; }
+.county-list { color: var(--muted); margin: 0; padding-left: 1.5rem; line-height: 1.6; }
+
+.route-map { margin: 1rem 0 1.5rem; }
+.map-slider { display: grid; gap: 0.25rem; font-size: 0.9rem; }
+.map-slider input { width: 100%; margin: 0; accent-color: var(--accent); }
+.map-slider-scale {
+  display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--muted);
+}
+.route-map-canvas { height: clamp(320px, 60vh, 640px); border-radius: 8px; overflow: hidden; }
+.route-map-legend {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1.25rem;
+  margin: 1rem 1rem 0; font-size: 0.85rem; color: var(--muted);
+}
+.legend-item { display: inline-flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.legend-line {
+  width: 24px; height: 4px; border-radius: 2px; background: #1d2433;
+  box-shadow: 0 0 0 1.5px #fff; /* same white casing as the map line */
+}
+.legend-checkpoint {
+  width: 10px; height: 10px; border-radius: 50%; background: var(--bg);
+  box-shadow: 0 0 0 3px var(--muted);
+}
+/* The recommended route and why. */
+.recommendation {
+  padding: 0.75rem 1rem; border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border-left: 4px solid var(--accent);
+}
+.recommendation .place-label { margin-bottom: 0.25rem; }
+.recommendation p { margin: 0; font-size: 0.9rem; }
+.recommendation .legend-line { display: inline-block; vertical-align: middle; margin-right: 0.4rem; }
+
+/* Miles per risk level, one row per route. */
+/* Wider than the pane: scrolls sideways inside its own box, not the page. */
+.miles { overflow-x: auto; max-width: 100%; min-width: 0; padding-bottom: 0.25rem; }
+.miles-table { min-width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+.miles-table th, .miles-table td {
+  padding: 0.35rem 0.5rem; white-space: nowrap;
+  border-bottom: 1px solid color-mix(in srgb, var(--muted) 20%, transparent);
+}
+.miles-table thead th { color: var(--muted); font-weight: 600; }
+.miles-table th[scope="row"] { text-align: left; font-weight: 700; }
+.miles-table thead th:first-child { text-align: left; }
+/* Average risk and ETA, after the miles: set apart by a divider. */
+.miles-table th:nth-last-child(2), .miles-table td:nth-last-child(2) {
+  border-left: 1px solid color-mix(in srgb, var(--muted) 30%, transparent); padding-left: 0.6rem;
+}
+.miles-table th[scope="row"] .legend-line, .miles-table thead .legend-swatch {
+  display: inline-block; vertical-align: middle; margin-right: 0.35rem;
+}
+.miles-table thead .legend-swatch { width: 10px; height: 10px; }
+.miles-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.miles-table .zero { color: var(--muted); opacity: 0.6; }
+
+/* A checkpoint's arrival time on the map: white halo to read over any background. */
+.checkpoint-eta {
+  text-shadow: 0 0 2px #fff, 0 0 2px #fff, 0 0 3px #fff, 0 0 4px #fff;
+  font-family: "Manrope", system-ui, sans-serif; font-variant-numeric: tabular-nums;
+}
+.checkpoint-info {
+  display: grid; gap: 0.15rem; padding-right: 0.25rem; white-space: nowrap;
+  font: 0.8rem/1.4 "Manrope", system-ui, sans-serif; color: #1c1917;
+}
+.legend-swatch { width: 14px; height: 14px; border-radius: 3px; }
+
+.route-result { margin-top: 2rem; scroll-margin-top: 1rem; }
+.route-title { font-size: 1.25rem; margin: 0 0 0.25rem; }
+
+.examples { overflow: auto; min-height: 0; flex: 1; }
+.examples-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+.examples-table caption { text-align: left; font-weight: 700; margin-bottom: 0.5rem; }
+.examples-table th {
+  position: sticky; top: 0; z-index: 1; background: var(--bg); /* header stays while rows scroll */
+  text-align: left; color: var(--muted); font-weight: 600;
+  border-bottom: 1px solid color-mix(in srgb, var(--muted) 40%, transparent);
+  padding: 0.5rem;
+}
+.examples-table td {
+  padding: 0.6rem 0.5rem; vertical-align: top;
+  border-bottom: 1px solid color-mix(in srgb, var(--muted) 20%, transparent);
+}
+.examples-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.examples-table tbody tr { cursor: pointer; }
+.examples-table tbody tr:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.examples-table tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.examples-table tbody tr.selected {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  box-shadow: inset 4px 0 0 var(--accent);
+}

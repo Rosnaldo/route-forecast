@@ -1,7 +1,7 @@
 """
 Decorators: functions that take a function and return a new one.
 `functools.wraps` keeps the original __name__/__doc__ (important for logging,
-Celery task names, DRF introspection...). ParamSpec keeps the type signature.
+DRF introspection...). ParamSpec keeps the type signature.
 """
 
 import functools

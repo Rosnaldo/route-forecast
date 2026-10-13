@@ -12,7 +12,7 @@ def home(request: HttpRequest):
 
 @require_GET
 def health(request: HttpRequest) -> JsonResponse:
-    """Liveness/readiness probe for Docker, ALB target groups, Kubernetes."""
+    """Liveness/readiness probe (Docker healthchecks, uptime monitors)."""
     checks = {}
     try:
         cache.set("health", "ok", 5)

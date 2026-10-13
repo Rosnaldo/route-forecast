@@ -23,7 +23,8 @@ ARG GOOGLE_MAPS_API_KEY=""
 ENV GOOGLE_MAPS_API_KEY=$GOOGLE_MAPS_API_KEY
 RUN npm run build
 
-# ---------- runtime: nginx serving the bundle ----------
+# ---------- runtime: nginx with the bundle ----------
+# No config here: docker-compose.prod.yml runs it as nginx-https with
+# nginx/prod/https/nginx.conf.
 FROM nginx:1.27-alpine AS runtime
-COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html

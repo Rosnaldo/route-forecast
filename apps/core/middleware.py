@@ -9,8 +9,12 @@ Two middleware styles:
 import logging
 import time
 import uuid
+import zlib
 
 from asgiref.sync import iscoroutinefunction, markcoroutinefunction
+from django.middleware.gzip import GZipMiddleware as DjangoGZipMiddleware
+from django.middleware.gzip import re_accepts_gzip
+from django.utils.cache import patch_vary_headers
 
 from .logging import request_id_var
 
@@ -71,4 +75,43 @@ class RequestTimingMiddleware:
                 "status": response.status_code,
             },
         )
+        return response
+
+
+class GZipMiddleware(DjangoGZipMiddleware):
+    """Django's GZip, plus event streams. Django's buffers its output, which would hold
+    server-sent events back; for those, each event is compressed and flushed on its
+    own, so it reaches the browser compressed and at once."""
+
+    def process_response(self, request, response):
+        if not response.get("Content-Type", "").startswith("text/event-stream"):
+            return super().process_response(request, response)
+        if response.has_header("Content-Encoding") or not re_accepts_gzip.search(
+            request.META.get("HTTP_ACCEPT_ENCODING", "")
+        ):
+            return response
+        patch_vary_headers(response, ("Accept-Encoding",))
+        response["Content-Encoding"] = "gzip"
+        compressor = zlib.compressobj(wbits=31)  # 31: gzip format
+
+        def flushed(chunk) -> bytes:
+            data = chunk.encode() if isinstance(chunk, str) else chunk
+            return compressor.compress(data) + compressor.flush(zlib.Z_SYNC_FLUSH)
+
+        content = response.streaming_content
+        if response.is_async:
+
+            async def compressed():
+                async for chunk in content:
+                    yield flushed(chunk)
+                yield compressor.flush()
+
+        else:
+
+            def compressed():
+                for chunk in content:
+                    yield flushed(chunk)
+                yield compressor.flush()
+
+        response.streaming_content = compressed()
         return response
