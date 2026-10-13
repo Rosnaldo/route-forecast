@@ -90,7 +90,7 @@ def test_series_from_older_cached_data():
 
 def test_weather_grid_classifies_each_hour_for_the_weight():
     with fake_open_meteo(wind=40) as urlopen:
-        grid = weather_grid(ROUTE, [SQUARE], 45_000, now=NOW)
+        grid = weather_grid([(ROUTE, [SQUARE])], 45_000, now=NOW)
     assert urlopen.call_count == 1
     assert (grid.now, grid.start, grid.weight_lb) == (NOW, START, 45_000)
     assert len(grid.points) == len(grid.cells) == 4
@@ -100,33 +100,51 @@ def test_weather_grid_classifies_each_hour_for_the_weight():
     assert point.levels == [RiskLevel.SEVERE] * (FORECAST_HOURS + 1)
     assert point.wind_mph[0] == 40
     # West cells are passed after a quarter of the trip, east ones after three quarters.
-    assert sorted({p.offset_s for p in grid.points}) == [3600, 3 * 3600]
+    (route_cells,) = grid.route_cells
+    assert sorted(rc.cell for rc in route_cells) == [0, 1, 2, 3]
+    assert sorted({rc.offset_s for rc in route_cells}) == [3600, 3 * 3600]
     assert grid.cells[0].outline()["type"] == "Polygon"
 
 
 def test_weather_grid_light_load():
     with fake_open_meteo(wind=40):
-        grid = weather_grid(ROUTE, [SQUARE], 20_000, now=NOW)
+        grid = weather_grid([(ROUTE, [SQUARE])], 20_000, now=NOW)
     assert set(grid.points[0].levels) == {RiskLevel.HIGH}
 
 
 def test_weather_grid_caches_forecasts():
     with fake_open_meteo() as urlopen:
-        weather_grid(ROUTE, [SQUARE], now=NOW)
-        weather_grid(ROUTE, [SQUARE], now=NOW)
+        weather_grid([(ROUTE, [SQUARE])], now=NOW)
+        weather_grid([(ROUTE, [SQUARE])], now=NOW)
     assert urlopen.call_count == 1
 
 
 def test_weather_grid_coarsens_long_routes():
     with mock.patch("apps.trips.weather.MAX_CELLS", 1), fake_open_meteo():
-        grid = weather_grid(ROUTE, [SQUARE], now=NOW)
+        grid = weather_grid([(ROUTE, [SQUARE])], now=NOW)
     assert len(grid.points) == 1
     assert {cell.point for cell in grid.cells} == {0}
 
 
 def test_weather_grid_without_counties():
-    assert weather_grid(ROUTE, [], now=NOW).points == []
-    assert weather_grid(ROUTE, [County("99003", "No outline", "ZZ")], now=NOW).cells == []
+    assert weather_grid([], now=NOW).points == []
+    grid = weather_grid([(ROUTE, [County("99003", "No outline", "ZZ")])], now=NOW)
+    assert grid.cells == []
+    assert grid.route_cells == [[]]
+
+
+def test_routes_share_cells_and_fetches():
+    # East to west over the same square: same cells, fetched once, reversed timing.
+    back = Route(distance_m=35_000, duration_s=4 * 3600, points=ROUTE.points[::-1])
+    with fake_open_meteo() as urlopen:
+        grid = weather_grid([(ROUTE, [SQUARE]), (back, [SQUARE])], now=NOW)
+    assert urlopen.call_count == 1
+    assert len(grid.cells) == 4
+    there, back_again = (
+        {grid.cells[rc.cell].point: rc.offset_s for rc in cells} for cells in grid.route_cells
+    )
+    assert there.keys() == back_again.keys()
+    assert all(there[p] + back_again[p] == 4 * 3600 for p in there)
 
 
 @pytest.mark.parametrize(
@@ -142,4 +160,4 @@ def test_weather_api_errors(error, message):
         mock.patch("apps.trips.weather.urllib.request.urlopen", side_effect=error),
         pytest.raises(UpstreamError, match=message),
     ):
-        weather_grid(ROUTE, [SQUARE], now=NOW)
+        weather_grid([(ROUTE, [SQUARE])], now=NOW)

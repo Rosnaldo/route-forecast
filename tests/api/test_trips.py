@@ -6,7 +6,7 @@ from unittest import mock
 import pytest
 
 from apps.trips.counties import County, counties_along
-from apps.trips.routing import decode_polyline
+from apps.trips.routing import Route, decode_polyline
 from apps.trips.weather import WeatherGrid
 
 URL = "/api/v1/trips/route/"
@@ -26,17 +26,19 @@ def _routes_key(settings):
 @pytest.fixture(autouse=True)
 def _no_weather():
     """The weather grid has its own tests (unit/test_weather.py); keep these offline."""
-    grid = WeatherGrid(
-        now=1_800_000_000, start=1_799_998_400, weight_lb=20_000, points=[], cells=[]
-    )
-    with mock.patch("apps.trips.views.weather_grid", return_value=grid) as weather:
+
+    def grid(routes, weight_lb):
+        return WeatherGrid(1_800_000_000, 1_799_998_400, weight_lb, [], [], [[] for _ in routes])
+
+    with mock.patch("apps.trips.views.weather_grid", side_effect=grid) as weather:
         yield weather
 
 
 def fake_urlopen(payload):
+    """Every Routes API call (the main one and any fallbacks) gets `payload`."""
     return mock.patch(
         "apps.trips.routing.urllib.request.urlopen",
-        return_value=io.BytesIO(json.dumps(payload).encode()),
+        side_effect=lambda *args, **kwargs: io.BytesIO(json.dumps(payload).encode()),
     )
 
 
@@ -51,36 +53,60 @@ def test_route(api_client, _no_weather):
                 "distanceMeters": 158000,
                 "duration": "6300s",
                 "polyline": {"encodedPolyline": ENCODED},
-            }
+                "description": "I-70 W",
+            },
+            {
+                "distanceMeters": 170000,
+                "duration": "7200s",
+                "polyline": {"encodedPolyline": ENCODED},
+                "description": "US-6 W",
+            },
         ]
     }
     denver = County("08031", "Denver", "CO")
+    jefferson = County("08059", "Jefferson", "CO")
     with (
         fake_urlopen(payload) as urlopen,
-        mock.patch("apps.trips.views.counties_along", return_value=[denver]) as counties,
+        mock.patch(
+            "apps.trips.views.counties_along", side_effect=[[denver], [denver, jefferson]]
+        ) as counties,
     ):
         response = api_client.post(URL, {"departure": DENVER, "arrival": VAIL, "weight_lb": 20_000})
 
     assert response.status_code == 200
-    assert response.json() == {
-        "distance_m": 158000,
-        "duration_s": 6300,
-        "points": [list(p) for p in DECODED],
-        "counties": [{"fips": "08031", "name": "Denver", "state": "CO", "geometry": None}],
-        "weather": {
-            "now": 1_800_000_000,
-            "start": 1_799_998_400,
-            "hours": 48,
-            "weight_lb": 20_000,
-            "points": [],
-            "cells": [],
-        },
+    body = response.json()
+    assert [
+        (r["description"], r["distance_m"], r["duration_s"], r["counties"]) for r in body["routes"]
+    ] == [
+        ("I-70 W", 158000, 6300, ["08031"]),
+        ("US-6 W", 170000, 7200, ["08031", "08059"]),
+    ]
+    assert body["routes"][0]["points"] == [list(p) for p in DECODED]
+    assert body["routes"][0]["cells"] == []
+    # Counties crossed by any route, each once.
+    assert [c["fips"] for c in body["counties"]] == ["08031", "08059"]
+    assert body["weather"] == {
+        "now": 1_800_000_000,
+        "start": 1_799_998_400,
+        "hours": 48,
+        "weight_lb": 20_000,
+        "points": [],
+        "cells": [],
     }
-    counties.assert_called_once_with(DECODED)
-    assert _no_weather.call_args.args[1:] == ([denver], 20_000)
-    sent = json.loads(urlopen.call_args.args[0].data)
+    assert counties.call_count == 2
+    routes, weight = _no_weather.call_args.args
+    assert [route_counties for _, route_counties in routes] == [[denver], [denver, jefferson]]
+    assert weight == 20_000
+    sent = json.loads(urlopen.call_args_list[0].args[0].data)  # the main request
     assert sent["origin"]["location"]["latLng"] == {"latitude": 39.7392, "longitude": -104.9903}
     assert sent["travelMode"] == "DRIVE"
+    assert sent["computeAlternativeRoutes"] is True
+
+
+def test_display_points_are_simplified():
+    straight = Route(1, 1, [(39.0, -105.0 + i * 0.001) for i in range(1000)])
+    assert straight.display_points() == [(39.0, -105.0), (39.0, -104.001)]
+    assert Route(1, 1, DECODED[:2]).display_points() == DECODED[:2]
 
 
 def test_route_from_addresses(api_client):
@@ -95,7 +121,7 @@ def test_route_from_addresses(api_client):
             },
         )
     assert response.status_code == 200
-    sent = json.loads(urlopen.call_args.args[0].data)
+    sent = json.loads(urlopen.call_args_list[0].args[0].data)  # the main request
     assert sent["origin"] == {"address": "Denver, CO"}
     assert sent["destination"] == {"address": "Vail, CO"}
 

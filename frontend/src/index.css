@@ -30,7 +30,21 @@ h1 { margin-top: 0; }
   }
   /* A fixed height, so both tab panels get the same space whichever is open. */
   .workspace > .trip-form { height: 100%; min-height: 0; }
-  .workspace > .route-result { max-height: 100%; overflow-y: auto; margin-top: 0; }
+  .workspace > .route-result {
+    height: 100%; overflow-y: auto; margin-top: 0; display: flex; flex-direction: column;
+  }
+  .workspace > .route-result > * { flex: none; }
+  /* The map fills what the summary, slider and route cards leave, so it fits on screen;
+     the county list comes after it, reached by scrolling the pane. */
+  .workspace > .route-result > .route-map {
+    flex: 1 0 0; min-height: 360px; display: flex; flex-direction: column;
+  }
+  /* Takes no height in the layout, so the map can fill the screen; it overflows below
+     the map, which still scrolls into view. */
+  .workspace > .route-result > .county-lists { flex: 0 0 0; min-height: 0; }
+  /* Margins don't count when overflowing, so pad the end to keep space below. */
+  .workspace > .route-result > .county-lists > :last-child { padding-bottom: 1.5rem; }
+  .workspace .route-map-canvas { flex: 1; height: auto; min-height: 260px; }
 }
 /* Stacked: form first, then the result; both tab panels get the same fixed height. */
 @media (max-width: 900px) {
@@ -76,16 +90,14 @@ a { color: var(--accent); }
 .place-selected { margin: 0.5rem 0 0; color: var(--muted); font-size: 0.9rem; min-height: 1.2em; }
 .notice { padding: 0.75rem 1rem; border-left: 4px solid var(--accent); }
 .route-summary { margin-top: 1.5rem; font-weight: 700; }
-.county-list {
-  color: var(--muted); columns: 2; column-gap: 2rem;
-  margin: 1.5rem 1rem; padding-left: 1.5rem; line-height: 1.6;
+.county-lists { margin: 1.5rem 1rem 0; display: grid; gap: 1.25rem; }
+.county-group-title {
+  display: flex; align-items: center; gap: 0.5rem; margin: 0 0 0.25rem;
+  font-size: 0.9rem; font-weight: 700;
 }
+.county-list { color: var(--muted); margin: 0; padding-left: 1.5rem; line-height: 1.6; }
 
-.route-map { margin: 0 0 1.5rem; }
-.map-controls {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 0.75rem 2rem; margin-bottom: 0.75rem;
-}
+.route-map { margin: 1rem 0 1.5rem; }
 .map-slider { display: grid; gap: 0.25rem; font-size: 0.9rem; }
 .map-slider input { width: 100%; margin: 0; accent-color: var(--accent); }
 .map-slider-scale {

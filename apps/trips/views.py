@@ -7,7 +7,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .counties import counties_along
-from .routing import compute_route
+from .routing import compute_routes
 from .weather import FORECAST_HOURS, weather_grid
 
 EXAMPLE_ROUTES_FILE = settings.BASE_DIR / "example_routes.csv"
@@ -50,7 +50,6 @@ class GridPointSerializer(serializers.Serializer):
 
     lat = serializers.FloatField()
     lon = serializers.FloatField()
-    offset_s = serializers.IntegerField()
     wind_mph = serializers.ListField(child=serializers.FloatField(allow_null=True))
     rain_in_hr = serializers.ListField(child=serializers.FloatField(allow_null=True))
     snow_in_hr = serializers.ListField(child=serializers.FloatField(allow_null=True))
@@ -66,6 +65,8 @@ class WeatherCellSerializer(serializers.Serializer):
 
 
 class WeatherGridSerializer(serializers.Serializer):
+    """Hourly forecasts and grid cells, each sent once and shared by the routes."""
+
     now = serializers.IntegerField()
     start = serializers.IntegerField()
     hours = serializers.SerializerMethodField()
@@ -77,18 +78,36 @@ class WeatherGridSerializer(serializers.Serializer):
         return FORECAST_HOURS
 
 
-class RouteResponseSerializer(serializers.Serializer):
+class RouteCellSerializer(serializers.Serializer):
+    """A cell the route covers: `cell` indexes WeatherGridSerializer.cells."""
+
+    cell = serializers.IntegerField()
+    offset_s = serializers.IntegerField()  # when the truck passes nearest, after departure
+
+
+class RouteSerializer(serializers.Serializer):
     distance_m = serializers.IntegerField()
     duration_s = serializers.IntegerField()
-    points = serializers.ListField(child=serializers.ListField(child=serializers.FloatField()))
-    counties = CountySerializer(many=True)
+    description = serializers.CharField()
+    source = serializers.CharField()  # "google", or a fallback: "avoid_highways" / "detour"
+    points = serializers.ListField(  # [lat, lon], simplified for drawing
+        source="route.display_points", child=serializers.ListField(child=serializers.FloatField())
+    )
+    counties = serializers.ListField(child=serializers.CharField())  # fips, in travel order
+    cells = RouteCellSerializer(many=True)
+
+
+class RouteResponseSerializer(serializers.Serializer):
+    routes = RouteSerializer(many=True)  # fastest first
+    counties = CountySerializer(many=True)  # every county any route crosses, once
     weather = WeatherGridSerializer()
 
 
 class RouteView(APIView):
-    """Driving route between departure and arrival: [lat, lon] points, counties crossed,
-    and the hourly weather risk for the next FORECAST_HOURS on a grid over those counties,
-    for a truck carrying `weight_lb` of cargo."""
+    """Up to three driving routes between departure and arrival (Google's, plus fallbacks
+    when it has fewer): [lat, lon] points and counties crossed for each, and the hourly
+    weather risk for the next FORECAST_HOURS on a grid over those counties, for a
+    truck carrying `weight_lb` of cargo."""
 
     serializer_class = RouteRequestSerializer
 
@@ -98,10 +117,24 @@ class RouteView(APIView):
         departure, arrival, weight_lb = (
             params.validated_data[key] for key in ("departure", "arrival", "weight_lb")
         )
-        route = compute_route(departure, arrival)
-        counties = counties_along(route.points)
-        weather = weather_grid(route, counties, weight_lb)
-        data = {**vars(route), "counties": counties, "weather": weather}
+        routes = compute_routes(departure, arrival)
+        counties = [counties_along(route.points) for route in routes]
+        weather = weather_grid(list(zip(routes, counties, strict=True)), weight_lb)
+        data = {
+            "routes": [
+                {
+                    **vars(route),
+                    "route": route,
+                    "counties": [county.fips for county in route_counties],
+                    "cells": cells,
+                }
+                for route, route_counties, cells in zip(
+                    routes, counties, weather.route_cells, strict=True
+                )
+            ],
+            "counties": list({c.fips: c for cs in counties for c in cs}.values()),
+            "weather": weather,
+        }
         return Response(RouteResponseSerializer(data).data)
 
 

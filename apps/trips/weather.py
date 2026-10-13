@@ -1,13 +1,14 @@
 """
 Weather risk on a grid over the counties a route crosses, via Open-Meteo.
 
-The counties are covered by a fixed lat/lon grid. Each cell's center gets the
-hourly forecast for the whole window, classified hour by hour with the rules in
-risk.py, plus how long after departure the truck passes nearest to it (at the
-route's average speed). The client picks a departure time and reads each
-center's risk for the hour the truck gets there. Cells are clipped to each
-county outline, so a cell on a border is split into one piece per county; the
-pieces share the center's forecast.
+The counties each route crosses are covered by a fixed lat/lon grid. Each cell's
+center gets the hourly forecast for the whole window, classified hour by hour
+with the rules in risk.py. Each route's cells also carry how long after
+departure the truck passes nearest to their center (at that route's average
+speed); the client picks a departure time and reads each center's risk for the
+hour the truck gets there. Cells are clipped to each county outline, so a cell
+on a border is split into one piece per county; the pieces share the center's
+forecast. Routes share the grid, so a center on several routes is fetched once.
 
 Open-Meteo's free tier counts every location as a call (600 a minute), so the
 grid is capped at MAX_CELLS (long routes get bigger cells) and each center's
@@ -68,7 +69,6 @@ class GridPoint:
 
     lat: float
     lon: float
-    offset_s: int  # seconds after departure the truck passes nearest to here
     hours: list[Forecast | None]
     weight_lb: float  # cargo weight the levels are for
 
@@ -102,47 +102,65 @@ class Cell:
 
 
 @dataclass(frozen=True)
+class RouteCell:
+    cell: int  # index into WeatherGrid.cells
+    offset_s: int  # seconds after departure the truck passes nearest to the cell's center
+
+
+@dataclass(frozen=True)
 class WeatherGrid:
     now: int  # unix time the grid was made; departure offsets count from here
     start: int  # unix time of hour 0 in the series (the start of the current hour)
     weight_lb: float
     points: list[GridPoint]
-    cells: list[Cell]
+    cells: list[Cell]  # each once, however many routes cross it
+    route_cells: list[list[RouteCell]]  # per route, in the order given
 
 
 def weather_grid(
-    route: Route, counties: list[County], weight_lb: float = 0, now: float | None = None
+    routes: list[tuple[Route, list[County]]], weight_lb: float = 0, now: float | None = None
 ) -> WeatherGrid:
-    """Grid over `counties` with each center's hourly forecast and risk level for a truck
-    carrying `weight_lb` of cargo."""
+    """Grid over the counties of each (route, counties crossed), with each center's
+    hourly forecast and risk level for a truck carrying `weight_lb` of cargo."""
     now = int(time.time() if now is None else now)
     start = now - now % 3600
-    counties = [county for county in counties if county.geometry is not None]
-    if not counties or not route.points:
-        return WeatherGrid(now, start, weight_lb, [], [])
+    routes = [
+        (route, [county for county in counties if county.geometry is not None])
+        for route, counties in routes
+    ]
 
+    # One step for all routes, coarse enough that their cells together fit MAX_CELLS.
     step = GRID_STEP
-    pieces = _grid_pieces(counties, step)
+    pieces = [_grid_pieces(counties, step) for _, counties in routes]
     while _cell_count(pieces) > MAX_CELLS:
         step *= 1.5
-        pieces = _grid_pieces(counties, step)
+        pieces = [_grid_pieces(counties, step) for _, counties in routes]
 
-    line = LineString([(lon, lat) for lat, lon in route.points]) if len(route.points) > 1 else None
-    centers = sorted({center for center, _, _ in pieces})
+    centers = sorted({center for route_pieces in pieces for center, _, _ in route_pieces})
     hourly = _fetch(centers)
     points = [
-        GridPoint(
-            lat,
-            lon,
-            round(_offset_s(line, (lat, lon), route.duration_s)),
-            _series(hourly[(lat, lon)], start),
-            weight_lb,
-        )
-        for lat, lon in centers
+        GridPoint(lat, lon, _series(hourly[(lat, lon)], start), weight_lb) for lat, lon in centers
     ]
-    index = {center: i for i, center in enumerate(centers)}
-    cells = [Cell(index[center], county, piece) for center, county, piece in pieces]
-    return WeatherGrid(now, start, weight_lb, points, cells)
+    point_index = {center: i for i, center in enumerate(centers)}
+    cells: list[Cell] = []
+    cell_index: dict[tuple, int] = {}  # (center, fips) -> index into cells
+    route_cells = []
+    for (route, _), route_pieces in zip(routes, pieces, strict=True):
+        line = (
+            LineString([(lon, lat) for lat, lon in route.points]) if len(route.points) > 1 else None
+        )
+        offsets = {}
+        this_route = []
+        for center, county, piece in route_pieces:
+            key = (center, county.fips)
+            if key not in cell_index:
+                cell_index[key] = len(cells)
+                cells.append(Cell(point_index[center], county, piece))
+            if center not in offsets:
+                offsets[center] = round(_offset_s(line, center, route.duration_s))
+            this_route.append(RouteCell(cell_index[key], offsets[center]))
+        route_cells.append(this_route)
+    return WeatherGrid(now, start, weight_lb, points, cells, route_cells)
 
 
 def _grid_pieces(counties: list[County], step: float):
@@ -161,8 +179,8 @@ def _grid_pieces(counties: list[County], step: float):
     return pieces
 
 
-def _cell_count(pieces) -> int:
-    return len({center for center, _, _ in pieces})
+def _cell_count(pieces_per_route) -> int:
+    return len({center for pieces in pieces_per_route for center, _, _ in pieces})
 
 
 def _offset_s(line: LineString | None, center: tuple[float, float], duration_s: int) -> float:

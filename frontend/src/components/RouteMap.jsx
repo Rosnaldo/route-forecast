@@ -1,44 +1,18 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { loadGoogleMaps } from "../lib/googleMaps.js";
+import { NO_FORECAST_COLOR, RISK_LEVELS, levelColor } from "../lib/risk.js";
+import { routeColor, routeLetter, routeName } from "../lib/routes.js";
 
-// Heat ramp for risk level (pale yellow -> dark red), indexed by level 0-4.
-const RISK_LEVELS = [
-  { label: "Low", color: "#fff1a8" },
-  { label: "Moderate", color: "#fdc24e" },
-  { label: "High", color: "#f5832a" },
-  { label: "Severe", color: "#d6381f" },
-  { label: "No Travel", color: "#7d0f14" },
-];
-const NO_FORECAST_COLOR = "#c9ced6";
-const ROUTE_COLOR = "#1d2433";
+const HIGHLIGHT_COLOR = "#1d2433"; // hovered cell outline, departure/arrival dots
 const CASING_COLOR = "#ffffff";
 const COUNTY_COLOR = "#5b6472";
-
-const levelColor = (level) => (level == null ? NO_FORECAST_COLOR : RISK_LEVELS[level].color);
 
 const timeFormat = new Intl.DateTimeFormat(undefined, {
   weekday: "short",
   hour: "numeric",
   minute: "2-digit",
 });
-
-// Forecast at a grid point for the hour the truck gets there, leaving `departureHour` h
-// from now. Levels already account for the cargo weight sent with the request.
-function forecastAt(weather, point, departureHour) {
-  const { levels } = point;
-  const eta = weather.now + departureHour * 3600 + point.offset_s;
-  const hour = Math.floor((eta - weather.start) / 3600);
-  const inWindow = eta < weather.now + weather.hours * 3600 && levels[hour] != null;
-  if (!inWindow) return { eta, level: null };
-  return {
-    eta,
-    level: levels[hour],
-    wind: point.wind_mph[hour],
-    rain: point.rain_in_hr[hour],
-    snow: point.snow_in_hr[hour],
-  };
-}
 
 function describe(forecast, county) {
   const where = county ? `${county.name}, ${county.state}` : "";
@@ -63,123 +37,153 @@ const endpoint = (maps, fillColor, strokeColor) => ({
   },
 });
 
-// Google map of the trip: weather-risk heat map on a grid over the counties crossed,
-// county outlines and the route drawn on top.
-export default function RouteMap({ apiKey, route }) {
-  const { weather } = route;
+// Where to put a route's letter: the point (between 15% and 85% of the way) farthest
+// from the other routes, so labels of routes sharing a road do not stack.
+function labelPoint(routes, index) {
+  const sample = (points, n) =>
+    Array.from({ length: n }, (_, i) => points[Math.floor((i / (n - 1)) * (points.length - 1))]);
+  const own = sample(routes[index].points, 41).slice(6, -6);
+  const others = routes.filter((_, i) => i !== index).flatMap((r) => sample(r.points, 80));
+  const distance = ([lat, lon]) =>
+    Math.min(Infinity, ...others.map(([a, b]) => (lat - a) ** 2 + (lon - b) ** 2));
+  const [lat, lng] = own.reduce((best, point) => (distance(point) > distance(best) ? point : best));
+  return { lat, lng };
+}
+
+// Google map of the trip: every route drawn the same way in its own color with its
+// letter, and the weather-risk heat map on a grid over the counties all routes cross.
+// `forecasts` holds each grid cell's forecast, in weather.cells order.
+export default function RouteMap({ apiKey, routes, countyByFips, weather, forecasts }) {
   const container = useRef(null);
-  const dataLayer = useRef(null);
-  const [departureHour, setDepartureHour] = useState(0);
+  const map = useRef(null); // { maps, map, lines: [{ casing, line, label }] } once created
   const [hovered, setHovered] = useState(null); // index into weather.cells
   const [error, setError] = useState(null);
-  const [mapCount, setMapCount] = useState(0); // bumps when a map is created, to style it
+  const [mapCount, setMapCount] = useState(0); // bumps when a map is created, to fill it
 
-  const countyByFips = useMemo(
-    () => new Map(route.counties.map((county) => [county.fips, county])),
-    [route],
-  );
-
-  // Risk level per grid point for the chosen departure time.
-  const forecasts = useMemo(
-    () => weather.points.map((point) => forecastAt(weather, point, departureHour)),
-    [weather, departureHour],
-  );
-
+  // Create the map and a line per route.
   useEffect(() => {
     let cancelled = false;
-    const overlays = [];
     const listeners = [];
+    let lines = [];
 
     loadGoogleMaps(apiKey)
-      .then((maps) => maps.importLibrary("maps"))
-      .then(({ Map: GoogleMap, Polyline }) => {
+      .then((maps) => Promise.all([maps.importLibrary("maps"), maps.importLibrary("marker")]))
+      .then(([{ Map: GoogleMap, Polyline }, { Marker }]) => {
         if (cancelled) return;
         const { maps } = window.google;
-        const map = new GoogleMap(container.current, {
+        const instance = new GoogleMap(container.current, {
           mapTypeControl: false,
           streetViewControl: false,
           clickableIcons: false,
         });
 
-        dataLayer.current = map.data;
-        map.data.addGeoJson({
-          type: "FeatureCollection",
-          features: [
-            ...weather.cells.map(({ geometry, point }, index) => ({
-              type: "Feature",
-              geometry,
-              properties: { kind: "cell", index, point },
-            })),
-            ...route.counties
-              .filter((county) => county.geometry)
-              .map(({ geometry, fips }) => ({
-                type: "Feature",
-                geometry,
-                properties: { kind: "county", fips },
-              })),
-          ],
-        });
-        listeners.push(
-          map.data.addListener("mouseover", ({ feature }) => {
-            map.data.overrideStyle(feature, {
-              fillOpacity: 0.9,
-              strokeColor: ROUTE_COLOR,
-              strokeWeight: 2,
-            });
-            setHovered(feature.getProperty("index"));
-          }),
-          map.data.addListener("mouseout", ({ feature }) => {
-            map.data.revertStyle(feature);
-            setHovered(null);
-          }),
-        );
-
-        const path = route.points.map(([lat, lng]) => ({ lat, lng }));
-        overlays.push(
-          // White casing under the route keeps it readable over any fill.
-          new Polyline({
-            map,
+        const bounds = new maps.LatLngBounds();
+        lines = routes.map((route, index) => {
+          const path = route.points.map(([lat, lng]) => ({ lat, lng }));
+          path.forEach((point) => bounds.extend(point));
+          // White casing under each route keeps it readable over any fill.
+          const casing = new Polyline({
+            map: instance,
             path,
             strokeColor: CASING_COLOR,
             strokeWeight: 7,
             clickable: false,
-            zIndex: 10, // above the county fills
-          }),
-          new Polyline({
-            map,
+            zIndex: 10,
+          });
+          const line = new Polyline({
+            map: instance,
             path,
-            strokeColor: ROUTE_COLOR,
+            strokeColor: routeColor(index),
             strokeWeight: 4,
             clickable: false,
             zIndex: 11,
-            icons: [
-              { ...endpoint(maps, CASING_COLOR, ROUTE_COLOR), offset: "0%" },
-              { ...endpoint(maps, ROUTE_COLOR, CASING_COLOR), offset: "100%" },
-            ],
+            // All routes share departure and arrival: draw those dots once.
+            icons:
+              index === 0
+                ? [
+                    { ...endpoint(maps, CASING_COLOR, HIGHLIGHT_COLOR), offset: "0%" },
+                    { ...endpoint(maps, HIGHLIGHT_COLOR, CASING_COLOR), offset: "100%" },
+                  ]
+                : [],
+          });
+          const label = new Marker({
+            map: instance,
+            position: labelPoint(routes, index),
+            title: routeName(index),
+            clickable: false,
+            zIndex: 900,
+            label: { text: routeLetter(index), color: "#fff", fontWeight: "700", fontSize: "12px" },
+            icon: {
+              path: maps.SymbolPath.CIRCLE,
+              scale: 11,
+              fillColor: routeColor(index),
+              fillOpacity: 1,
+              strokeColor: CASING_COLOR,
+              strokeWeight: 2,
+            },
+          });
+          return { casing, line, label };
+        });
+        instance.fitBounds(bounds, 24);
+
+        listeners.push(
+          instance.data.addListener("mouseover", ({ feature }) => {
+            instance.data.overrideStyle(feature, {
+              fillOpacity: 0.9,
+              strokeColor: HIGHLIGHT_COLOR,
+              strokeWeight: 2,
+            });
+            setHovered(feature.getProperty("index"));
+          }),
+          instance.data.addListener("mouseout", ({ feature }) => {
+            instance.data.revertStyle(feature);
+            setHovered(null);
           }),
         );
-
-        const bounds = new maps.LatLngBounds();
-        path.forEach((point) => bounds.extend(point));
-        map.fitBounds(bounds, 24);
+        map.current = { maps, map: instance, lines };
         setMapCount((count) => count + 1);
       })
       .catch((err) => !cancelled && setError(err.message));
 
     return () => {
       cancelled = true;
-      dataLayer.current = null;
+      map.current = null;
       listeners.forEach((listener) => listener.remove());
-      overlays.forEach((overlay) => overlay.setMap(null));
+      lines.forEach((overlays) => Object.values(overlays).forEach((o) => o.setMap(null)));
     };
-  }, [apiKey, route, weather]);
+  }, [apiKey, routes]);
 
-  // Recolor the cells when the departure time changes, and on each new map.
+  // The heat map: every cell of the grid (all routes) and every county they cross.
   useEffect(() => {
-    dataLayer.current?.setStyle((feature) =>
+    if (!map.current) return;
+    const { map: instance } = map.current;
+    instance.data.forEach((feature) => instance.data.remove(feature));
+    instance.data.addGeoJson({
+      type: "FeatureCollection",
+      features: [
+        ...weather.cells.map(({ geometry }, index) => ({
+          type: "Feature",
+          geometry,
+          properties: { kind: "cell", index },
+        })),
+        ...[...countyByFips.values()]
+          .filter((county) => county.geometry)
+          .map(({ geometry, fips }) => ({
+            type: "Feature",
+            geometry,
+            properties: { kind: "county", fips },
+          })),
+      ],
+    });
+    setHovered(null);
+  }, [weather, countyByFips, mapCount]);
+
+  // Color the cells for the departure time; also once they are added.
+  useEffect(() => {
+    map.current?.map.data.setStyle((feature) =>
       feature.getProperty("kind") === "cell"
         ? {
-            fillColor: levelColor(forecasts[feature.getProperty("point")].level),
+            fillColor: levelColor(forecasts[feature.getProperty("index")]?.level),
             fillOpacity: 0.7,
             strokeWeight: 0,
             zIndex: 1,
@@ -198,43 +202,22 @@ export default function RouteMap({ apiKey, route }) {
 
   if (error) return <p className="notice">{error}</p>;
   const hasNoForecast = forecasts.some((forecast) => forecast.level == null);
-  const departure = new Date((weather.now + departureHour * 3600) * 1000);
-  const hoveredCell = hovered == null ? null : weather.cells[hovered];
+  const hoveredFips = hovered == null ? null : weather.cells[hovered]?.fips;
   return (
     <figure className="route-map">
-      <div className="map-controls">
-        <label className="map-slider">
-          <span>
-            Departure: <strong>{departureHour === 0 ? "now" : `in ${departureHour} h`}</strong> ·{" "}
-            {timeFormat.format(departure)}
-          </span>
-          <input
-            type="range"
-            min={0}
-            max={weather.hours}
-            step={1}
-            value={departureHour}
-            onChange={(event) => setDepartureHour(Number(event.target.value))}
-          />
-          <span className="map-slider-scale" aria-hidden="true">
-            <span>now</span>
-            <span>+12 h</span>
-            <span>+24 h</span>
-            <span>+36 h</span>
-            <span>+48 h</span>
-          </span>
-        </label>
-      </div>
       <div
         className="route-map-canvas"
         ref={container}
         role="img"
-        aria-label={`Weather risk map of the route through ${route.counties.length} counties`}
+        aria-label={`Weather risk map of ${routes.length} routes crossing ${countyByFips.size} counties`}
       />
       <figcaption className="route-map-legend">
-        <span className="legend-item">
-          <span className="legend-line" /> Route
-        </span>
+        {routes.map((_, index) => (
+          <span key={index} className="legend-item">
+            <span className="legend-line" style={{ background: routeColor(index) }} />
+            {routeName(index)}
+          </span>
+        ))}
         <span className="legend-item">
           {RISK_LEVELS.map(({ label, color }) => (
             <span key={label} className="legend-item">
@@ -250,8 +233,8 @@ export default function RouteMap({ apiKey, route }) {
           )}
         </span>
         <span className="legend-hover" aria-live="polite">
-          {hoveredCell
-            ? describe(forecasts[hoveredCell.point], countyByFips.get(hoveredCell.fips))
+          {hoveredFips
+            ? describe(forecasts[hovered], countyByFips.get(hoveredFips))
             : "Hover the map for the forecast when you get there"}
         </span>
       </figcaption>

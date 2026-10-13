@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "react";
 
 import ExampleRoutes from "./components/ExampleRoutes.jsx";
 import PlaceInput from "./components/PlaceInput.jsx";
-import RouteMap from "./components/RouteMap.jsx";
 import Tabs from "./components/Tabs.jsx";
+import TripResult from "./components/TripResult.jsx";
 import { WEIGHT_DEFAULT, WEIGHT_MAX, WEIGHT_MIN, WEIGHT_STEP, pounds } from "./lib/load.js";
 
 const apiKey = __GOOGLE_MAPS_API_KEY__;
@@ -17,21 +17,20 @@ function Selection({ place }) {
   );
 }
 
-function RouteSummary({ trip, route, loading, error }) {
+function RouteSummary({ trip, data, loading, error }) {
   if (!trip) return null;
   return (
     <div aria-live="polite">
       <h2 className="route-title">
         {trip.from} → {trip.to}
       </h2>
-      {loading && <p className="route-summary">Calculating route…</p>}
+      {loading && <p className="route-summary">Calculating routes…</p>}
       {error && <p className="notice">{error}</p>}
-      {route && !loading && (
+      {data && !loading && (
         <p className="route-summary">
-          {(route.distance_m / 1000).toFixed(0)} km
+          {data.routes.length} {data.routes.length === 1 ? "route" : "routes"}
           {trip.expectedKm && ` (expected ~${trip.expectedKm.toLocaleString()} km)`} ·{" "}
-          {Math.floor(route.duration_s / 3600)} h {Math.round((route.duration_s % 3600) / 60)} min
-          · {route.counties.length} counties · {pounds(route.weather.weight_lb)} load
+          {pounds(data.weather.weight_lb)} load
         </p>
       )}
     </div>
@@ -98,7 +97,7 @@ export default function App() {
   const [weightLb, setWeightLb] = useState(WEIGHT_DEFAULT);
   // The submitted request: { departure, arrival, weightLb } plus labels for the summary.
   const [trip, setTrip] = useState(null);
-  const [route, setRoute] = useState(null);
+  const [data, setData] = useState(null); // the endpoint's response: routes and weather
   const [loading, setLoading] = useState(false);
   const [routeError, setRouteError] = useState(null);
   const result = useRef(null);
@@ -108,13 +107,14 @@ export default function App() {
   const submit = (event) => {
     event.preventDefault();
     if (!draft) return;
-    setTrip({ ...draft, weightLb }); // a new object, so submitting again refetches
+    // A new object (and id), so submitting again refetches and resets the result.
+    setTrip({ ...draft, weightLb, id: Date.now() });
     // Side by side the result is already in view; stacked, scroll down to it.
     result.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   };
 
   useEffect(() => {
-    setRoute(null);
+    setData(null);
     setRouteError(null);
     if (!trip) return;
 
@@ -133,12 +133,12 @@ export default function App() {
       .then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.detail ?? JSON.stringify(data));
-        setRoute(data);
+        setData(data);
         setLoading(false);
       })
       .catch((err) => {
         if (err.name === "AbortError") return;
-        setRoute(null);
+        setData(null);
         setRouteError(err.message);
         setLoading(false);
       });
@@ -203,18 +203,10 @@ export default function App() {
         </form>
 
         <section ref={result} className="route-result">
-          <RouteSummary trip={trip} route={route} loading={loading} error={routeError} />
-          {route ? (
-            <>
-              <RouteMap apiKey={apiKey} route={route} />
-              <ol className="county-list">
-                {route.counties.map((county) => (
-                  <li key={county.fips}>
-                    {county.name}, {county.state}
-                  </li>
-                ))}
-              </ol>
-            </>
+          <RouteSummary trip={trip} data={data} loading={loading} error={routeError} />
+          {data ? (
+            // A new response starts fresh, with departure now.
+            <TripResult key={trip.id} apiKey={apiKey} data={data} />
           ) : (
             !trip && (
               <p className="place-selected">
