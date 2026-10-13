@@ -43,6 +43,9 @@ INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 # Order matters: each middleware wraps the ones below it (onion model).
 MIDDLEWARE = [
     "apps.core.middleware.RequestIDMiddleware",
+    # Before anything that reads or writes the body: compresses responses (route
+    # responses are ~1 MB of coordinates and shrink several times).
+    "django.middleware.gzip.GZipMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.middleware.common.CommonMiddleware",

@@ -6,6 +6,7 @@ from unittest import mock
 
 import pytest
 
+from apps.trips import checkpoints as checkpoints_module
 from apps.trips.checkpoints import Trip, load_trip, save_trip
 from apps.trips.counties import County, counties_along
 from apps.trips.routing import Point, Route, Step, decode_polyline
@@ -72,7 +73,7 @@ def test_route(api_client, _no_weather):
             {
                 "distanceMeters": 170000,
                 "duration": "7200s",
-                "polyline": {"encodedPolyline": ENCODED},
+                "polyline": {"encodedPolyline": ENCODED[:10]},  # just its first point
                 "description": "US-6 W",
             },
         ]
@@ -81,8 +82,10 @@ def test_route(api_client, _no_weather):
     jefferson = County("08059", "Jefferson", "CO")
     with (
         fake_urlopen(payload) as urlopen,
+        # Routes are looked up in parallel: answer by route (point count), not call order.
         mock.patch(
-            "apps.trips.views.counties_along", side_effect=[[denver], [denver, jefferson]]
+            "apps.trips.views.counties_along",
+            side_effect=lambda points: [denver] if len(points) == 3 else [denver, jefferson],
         ) as counties,
     ):
         response = api_client.post(URL, {"departure": DENVER, "arrival": VAIL, "weight_lb": 20_000})
@@ -157,11 +160,38 @@ def test_point_needs_coordinates_or_address(api_client, point):
     assert "departure" in response.json()
 
 
+def test_large_responses_are_gzipped(api_client):
+    response = api_client.get("/api/v1/trips/examples/", HTTP_ACCEPT_ENCODING="gzip")
+    assert response.status_code == 200
+    assert response["Content-Encoding"] == "gzip"
+
+
+def test_checkpoints_and_recommendation_share_the_risk_calculation(api_client):
+    trip_id = save_trip(
+        Trip([Route(111_195, 7200, [Point(0.0, 0.0), Point(0.0, 1.0)])], 20_000, 0.2)
+    )
+    hours = [Forecast(12, 0, 0)] * 49
+    body = checkpoints_body(trip_id)
+    with (
+        mock.patch(
+            "apps.trips.checkpoints.hourly_forecasts",
+            side_effect=lambda centers, start: dict.fromkeys(centers, hours),
+        ),
+        mock.patch(
+            "apps.trips.checkpoints.route_risks", wraps=checkpoints_module.route_risks
+        ) as risks,
+    ):
+        assert api_client.post(CHECKPOINTS_URL, body, format="json").status_code == 200
+        del body["distance_mi"]
+        assert api_client.post(RECOMMENDATION_URL, body, format="json").status_code == 200
+    assert risks.call_count == 1  # computed for checkpoints, reused by the recommendation
+
+
 def test_example_routes(api_client):
     response = api_client.get("/api/v1/trips/examples/")
     assert response.status_code == 200
     rows = response.json()
-    assert len(rows) == 10
+    assert len(rows) == 11
     assert rows[0] | {"purpose": None} == {
         "id": 1,
         "departure": "Denver, CO",

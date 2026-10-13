@@ -9,3 +9,4 @@ id,departure,arrival,distance_km,purpose
 8,"Atlanta, GA","Atlanta Hartsfield-Jackson Airport",15,"Very short trip; edge case for the minimum number of route points"
 9,"Miami, FL","Seattle, WA",5300,"Cross-country, longer than 48 h of driving; part of the trip is beyond the forecast window"
 10,"Port of Long Beach, CA","Phoenix Sky Harbor Airport, AZ",600,"Landmark-to-landmark input instead of city names, like real truck trips"
+11,"Key West, FL","Blaine, WA",5730,"Corner to corner (southern tip of Florida to the Canadian border), the longest trip: over 50 h of driving with breaks, so the end is well beyond the forecast window; stress test for grid size and response time"

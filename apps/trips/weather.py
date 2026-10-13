@@ -24,9 +24,10 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
+import numpy as np
 import shapely
 from django.core.cache import cache
-from shapely import LineString, Point, box
+from shapely import LineString, Point
 from shapely.geometry import mapping
 
 from apps.core.exceptions import UpstreamError
@@ -132,11 +133,8 @@ def weather_grid(
     ]
 
     # One step for all routes, coarse enough that their cells together fit MAX_CELLS.
-    step = GRID_STEP
+    step = _grid_step([counties for _, counties in routes])
     pieces = [_grid_pieces(counties, step) for _, counties in routes]
-    while _cell_count(pieces) > MAX_CELLS:
-        step *= 1.5
-        pieces = [_grid_pieces(counties, step) for _, counties in routes]
 
     centers = sorted({center for route_pieces in pieces for center, _, _ in route_pieces})
     hourly = _fetch(centers)
@@ -185,24 +183,56 @@ def hourly_forecasts(
     return {center: _series(hourly[center], start) for center in centers}
 
 
+def _grid_step(counties_per_route: list[list[County]]) -> float:
+    """Cell size: GRID_STEP, or coarser until all routes' cells fit MAX_CELLS.
+
+    The number of cells shrinks roughly with the square of the size, so each try
+    jumps straight to the size that should fit; counting is cheap (no clipping), and
+    one or two counts are usually enough."""
+    step = GRID_STEP
+    while (count := _cell_count(counties_per_route, step)) > MAX_CELLS:
+        step *= max(1.05, math.sqrt(count / MAX_CELLS) * 1.02)
+    return step
+
+
+def _cell_count(counties_per_route: list[list[County]], step: float) -> int:
+    """Grid cells of size `step` touching any of the counties (all routes, each once)."""
+    centers = set()
+    for counties in counties_per_route:
+        for county in counties:
+            cells, indices = _candidate_cells(county, step)
+            touching = shapely.intersects(cells, county.geometry)
+            centers.update(_center(i, j, step) for i, j in indices[touching])
+    return len(centers)
+
+
 def _grid_pieces(counties: list[County], step: float):
     """(cell center (lat, lon), county, cell clipped to county) for every non-empty piece."""
     pieces = []
     for county in counties:
-        min_lon, min_lat, max_lon, max_lat = county.geometry.bounds
-        for i in range(math.floor(min_lat / step), math.ceil(max_lat / step)):
-            for j in range(math.floor(min_lon / step), math.ceil(max_lon / step)):
-                cell = box(j * step, i * step, (j + 1) * step, (i + 1) * step)
-                piece = cell.intersection(county.geometry)
-                if piece.area < cell.area * 1e-6:  # nothing, or a float-rounding sliver
-                    continue
-                center = _center(i, j, step)
-                pieces.append((center, county, piece))
+        cells, indices = _candidate_cells(county, step)
+        touching = shapely.intersects(cells, county.geometry)
+        clipped = shapely.intersection(cells[touching], county.geometry)
+        # Skip empty pieces and float-rounding slivers.
+        keep = shapely.area(clipped) >= step * step * 1e-6
+        for (i, j), piece in zip(indices[touching][keep], clipped[keep], strict=True):
+            pieces.append((_center(int(i), int(j), step), county, piece))
     return pieces
 
 
-def _cell_count(pieces_per_route) -> int:
-    return len({center for pieces in pieces_per_route for center, _, _ in pieces})
+def _candidate_cells(county: County, step: float) -> tuple[np.ndarray, np.ndarray]:
+    """The grid cells covering the county's bounding box, and their (i, j) indices
+    (row i: latitude, column j: longitude). The county is prepared for fast tests."""
+    shapely.prepare(county.geometry)
+    min_lon, min_lat, max_lon, max_lat = county.geometry.bounds
+    i, j = np.meshgrid(
+        np.arange(math.floor(min_lat / step), math.ceil(max_lat / step)),
+        np.arange(math.floor(min_lon / step), math.ceil(max_lon / step)),
+        indexing="ij",
+    )
+    i, j = i.ravel(), j.ravel()
+    cells = shapely.box(j * step, i * step, (j + 1) * step, (i + 1) * step)
+    return cells, np.column_stack([i, j])
 
 
 def _offset_s(

@@ -28,6 +28,9 @@ from .weather import FORECAST_HOURS, Forecast, grid_center, hourly_forecasts
 
 METERS_PER_MILE = 1609.344
 TRIP_CACHE_SECONDS = 60 * 60  # how long a computed trip can get checkpoints
+# Route risks for a trip and departure are kept this long: the checkpoints and the
+# recommendation requests for the same departure share one calculation.
+RISKS_CACHE_SECONDS = 5 * 60
 # Miles per risk level: stretches between points longer than this (straight highways
 # can have points kilometers apart) are split, each piece with its own forecast.
 MAX_SEGMENT_M = 1000
@@ -94,17 +97,22 @@ def _trip_key(trip_id: str) -> str:
 
 
 def trip_checkpoints(
-    trip: Trip, gap_mi: float, departure: float, now: float | None = None
+    trip: Trip,
+    gap_mi: float,
+    departure: float,
+    now: float | None = None,
+    risks: list[RouteRisk] | None = None,
 ) -> list[RouteCheckpoints]:
     """Checkpoints every `gap_mi` miles along each of the trip's routes, and each route's
-    miles per risk level, for a departure at unix time `departure`."""
+    miles per risk level, for a departure at unix time `departure` (pass `risks` when
+    already computed for it)."""
     placed = [_along(route, gap_mi * METERS_PER_MILE) for route in trip.routes]
     forecast_at = _forecast_lookup(trip, [p[:2] for route in placed for p in route], now)
 
     result = []
-    for route, points, risk in zip(
-        trip.routes, placed, route_risks(trip, departure, now), strict=True
-    ):
+    if risks is None:
+        risks = route_risks(trip, departure, now)
+    for route, points, risk in zip(trip.routes, placed, risks, strict=True):
         times = TravelTimes(route)
         checkpoints = []
         for lat, lon, distance_m, is_arrival in points:
@@ -127,6 +135,16 @@ def trip_checkpoints(
             )
         result.append(RouteCheckpoints(checkpoints, risk.miles_by_level))
     return result
+
+
+def cached_route_risks(trip_id: str, trip: Trip, departure: float) -> list[RouteRisk]:
+    """route_risks, kept RISKS_CACHE_SECONDS per trip and departure (to the second)."""
+    key = f"risks:{trip_id}:{int(departure)}"
+    risks = cache.get(key)
+    if risks is None:
+        risks = route_risks(trip, departure)
+        cache.set(key, risks, RISKS_CACHE_SECONDS)
+    return risks
 
 
 def route_risks(trip: Trip, departure: float, now: float | None = None) -> list[RouteRisk]:

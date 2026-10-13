@@ -7,6 +7,7 @@ into memory once per process, with an STRtree spatial index so a lookup only
 runs exact geometry checks on counties whose bounding box touches the route.
 """
 
+import threading
 from dataclasses import dataclass, field
 from functools import cache
 
@@ -38,8 +39,18 @@ class County:
         return mapping(shapely.set_precision(simplified, DISPLAY_GRID))
 
 
-@cache
+_index_lock = threading.Lock()
+
+
 def _index() -> tuple[STRtree, list[County]]:
+    """The spatial index, loaded on first use; safe when several routes (threads) ask
+    for it at once: only one of them loads it."""
+    with _index_lock:
+        return _load_index()
+
+
+@cache
+def _load_index() -> tuple[STRtree, list[County]]:
     """Load every county outline and build the spatial index (first call only)."""
     counties = []
     with shapefile.Reader(str(COUNTIES_FILE)) as reader:

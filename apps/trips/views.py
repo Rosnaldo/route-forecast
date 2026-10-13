@@ -1,5 +1,6 @@
 import csv
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from django.conf import settings
 from rest_framework import serializers
@@ -7,7 +8,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .checkpoints import Trip, load_trip, route_risks, save_trip, trip_checkpoints
+from .checkpoints import Trip, cached_route_risks, load_trip, save_trip, trip_checkpoints
 from .counties import counties_along
 from .recommendation import recommend
 from .routing import compute_routes
@@ -122,7 +123,10 @@ class RouteView(APIView):
             params.validated_data[key] for key in ("departure", "arrival", "weight_lb")
         )
         routes = compute_routes(departure, arrival)
-        counties = [counties_along(route.points) for route in routes]
+        # Routes are independent: find their counties in parallel (shapely's geometry
+        # work runs outside the GIL).
+        with ThreadPoolExecutor(len(routes)) as pool:
+            counties = list(pool.map(lambda route: counties_along(route.points), routes))
         weather = weather_grid(list(zip(routes, counties, strict=True)), weight_lb)
         trip_id = save_trip(Trip(routes, weight_lb, weather.step))
         data = {
@@ -203,7 +207,8 @@ class CheckpointsView(APIView):
             params.validated_data[key] for key in ("trip_id", "distance_mi", "departure")
         )
         trip = load_trip(trip_id)
-        checkpoints = trip_checkpoints(trip, distance_mi, departure.timestamp())
+        risks = cached_route_risks(trip_id, trip, departure.timestamp())
+        checkpoints = trip_checkpoints(trip, distance_mi, departure.timestamp(), risks=risks)
         data = {"distance_mi": distance_mi, "departure": departure, "routes": checkpoints}
         return Response(CheckpointsResponseSerializer(data).data)
 
@@ -234,9 +239,11 @@ class RecommendationView(APIView):
     def post(self, request: Request, version: str) -> Response:
         params = TripDepartureSerializer(data=request.data)
         params.is_valid(raise_exception=True)
-        trip = load_trip(params.validated_data["trip_id"])
+        trip_id = params.validated_data["trip_id"]
         departure = params.validated_data["departure"]
-        recommendation = recommend(route_risks(trip, departure.timestamp()))
+        # Usually already computed by the checkpoints request for the same departure.
+        risks = cached_route_risks(trip_id, load_trip(trip_id), departure.timestamp())
+        recommendation = recommend(risks)
         data = {
             "departure": departure,
             "recommended": recommendation.ranking[0].route,

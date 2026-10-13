@@ -8,6 +8,7 @@ import pytest
 from shapely import box
 
 from apps.core.exceptions import UpstreamError
+from apps.trips import weather as weather_module
 from apps.trips.counties import County
 from apps.trips.risk import RiskLevel
 from apps.trips.routing import Point, Route
@@ -170,3 +171,20 @@ def test_weather_api_errors(error, message):
         pytest.raises(UpstreamError, match=message),
     ):
         weather_grid([(ROUTE, [SQUARE])], now=NOW)
+
+
+def test_grid_step_jumps_to_a_size_that_fits():
+    # A 4 x 4 degree county: 400 cells at 0.2 degrees, more than MAX_CELLS (300).
+    big = County("99004", "Big", "ZZ", box(-110.0, 38.0, -106.0, 42.0))
+    with mock.patch("apps.trips.weather._cell_count", wraps=weather_module._cell_count) as count:
+        step = weather_module._grid_step([[big]])
+    assert weather_module._cell_count([[big]], step) <= weather_module.MAX_CELLS
+    assert step > weather_module.GRID_STEP
+    assert count.call_count <= 3  # one jump instead of growing x1.5 pass after pass
+
+
+def test_grid_pieces_cover_each_county_exactly():
+    odd = County("99005", "Odd", "ZZ", box(-104.93, 39.07, -104.31, 39.88))
+    pieces = _grid_pieces([odd], 0.2)
+    assert sum(piece.area for _, _, piece in pieces) == pytest.approx(odd.geometry.area)
+    assert len({center for center, _, _ in pieces}) == len(pieces)  # one piece per cell
