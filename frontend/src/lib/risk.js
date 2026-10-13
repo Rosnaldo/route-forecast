@@ -10,15 +10,18 @@ export const RISK_LEVELS = [
   { label: "No Travel", color: "#7d0f14" },
 ];
 export const NO_FORECAST_COLOR = "#c9ced6";
+export const LOADING_COLOR = "#e4e7ec"; // a cell whose forecast has not streamed in yet
 
 export const levelColor = (level) =>
   level == null ? NO_FORECAST_COLOR : RISK_LEVELS[level].color;
 
-// Forecast at a grid point for the hour the truck gets there: it passes nearest the
+// Forecast at a grid point for the hour the truck gets there (`loading` until the
+// point's forecast has streamed in): it passes nearest the
 // point `offsetS` after departure, and departs `departureHour` h from now. Levels
 // already account for the cargo weight sent with the request.
 function forecastAt(weather, point, offsetS, departureHour) {
   const eta = weather.now + departureHour * 3600 + offsetS;
+  if (!point.levels) return { eta, level: null, loading: true }; // not streamed in yet
   const hour = Math.floor((eta - weather.start) / 3600);
   const inWindow = eta < weather.now + weather.hours * 3600 && point.levels[hour] != null;
   if (!inWindow) return { eta, level: null };

@@ -42,7 +42,11 @@ class Trip:
 
     routes: list[Route]
     weight_lb: float
-    step: float  # weather grid cell size
+    # The weather grid, added once built (grid.py): cell size (0 until then), forecast
+    # points (cell centers, in streaming order) and unix time of hour 0 of their series.
+    step: float = 0.0
+    points: tuple[tuple[float, float], ...] = ()
+    start: int = 0
 
 
 @dataclass(frozen=True)
@@ -84,6 +88,11 @@ def save_trip(trip: Trip) -> str:
     return trip_id
 
 
+def update_trip(trip_id: str, trip: Trip) -> None:
+    """Store a changed trip under its id (its lifetime restarts)."""
+    cache.set(_trip_key(trip_id), trip, TRIP_CACHE_SECONDS)
+
+
 def load_trip(trip_id: str) -> Trip:
     trip = cache.get(_trip_key(trip_id))
     if trip is None:
@@ -92,8 +101,8 @@ def load_trip(trip_id: str) -> Trip:
 
 
 def _trip_key(trip_id: str) -> str:
-    # v2: routes hold Point/Step objects; trips saved before that are not found.
-    return f"trip:v2:{trip_id}"
+    # v4: the grid is added after the routes; trips saved before that are not found.
+    return f"trip:v4:{trip_id}"
 
 
 def trip_checkpoints(

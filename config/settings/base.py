@@ -44,8 +44,9 @@ INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 MIDDLEWARE = [
     "apps.core.middleware.RequestIDMiddleware",
     # Before anything that reads or writes the body: compresses responses (route
-    # responses are ~1 MB of coordinates and shrink several times).
-    "django.middleware.gzip.GZipMiddleware",
+    # responses are ~1 MB of coordinates and shrink several times), event streams
+    # event by event.
+    "apps.core.middleware.GZipMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.middleware.common.CommonMiddleware",

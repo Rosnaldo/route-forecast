@@ -21,8 +21,10 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from typing import NamedTuple
 
 import numpy as np
 import shapely
@@ -43,7 +45,7 @@ FORECAST_HOURS = 48  # the app's forecast window
 GRID_STEP = 0.2  # degrees, ~20 km; about the resolution of the US forecast models
 MAX_CELLS = 300  # long routes get a coarser grid instead of more requests
 CACHE_SECONDS = 30 * 60
-LOCATIONS_PER_REQUEST = 100
+LOCATIONS_PER_REQUEST = 80  # also the size of each streamed batch
 PARALLEL_REQUESTS = 4
 
 
@@ -111,11 +113,16 @@ class RouteCell:
 
 @dataclass(frozen=True)
 class WeatherGrid:
+    """The grid's layout: where each forecast point and cell is, without forecasts
+    (those are streamed afterwards, see forecast_events)."""
+
     now: int  # unix time the grid was made; departure offsets count from here
     start: int  # unix time of hour 0 in the series (the start of the current hour)
     weight_lb: float
     step: float  # cell size in degrees (coarser than GRID_STEP on long trips)
-    points: list[GridPoint]
+    # Cell centers (lat, lon), ordered by when the truck first reaches them on any
+    # route: forecasts for the start of the trip are fetched first.
+    points: list[tuple[float, float]]
     cells: list[Cell]  # each once, however many routes cross it
     route_cells: list[list[RouteCell]]  # per route, in the order given
 
@@ -123,8 +130,8 @@ class WeatherGrid:
 def weather_grid(
     routes: list[tuple[Route, list[County]]], weight_lb: float = 0, now: float | None = None
 ) -> WeatherGrid:
-    """Grid over the counties of each (route, counties crossed), with each center's
-    hourly forecast and risk level for a truck carrying `weight_lb` of cargo."""
+    """Grid over the counties of each (route, counties crossed): its cells, their
+    forecast points, and when each route reaches them. No forecasts are fetched."""
     now = int(time.time() if now is None else now)
     start = now - now % 3600
     routes = [
@@ -136,33 +143,100 @@ def weather_grid(
     step = _grid_step([counties for _, counties in routes])
     pieces = [_grid_pieces(counties, step) for _, counties in routes]
 
-    centers = sorted({center for route_pieces in pieces for center, _, _ in route_pieces})
-    hourly = _fetch(centers)
-    points = [
-        GridPoint(lat, lon, _series(hourly[(lat, lon)], start), weight_lb) for lat, lon in centers
-    ]
-    point_index = {center: i for i, center in enumerate(centers)}
-    cells: list[Cell] = []
-    cell_index: dict[tuple, int] = {}  # (center, fips) -> index into cells
-    route_cells = []
+    # When each route passes nearest to each of its cell centers.
+    offsets = []
     for (route, _), route_pieces in zip(routes, pieces, strict=True):
         line = (
             LineString([(lon, lat) for lat, lon in route.points]) if len(route.points) > 1 else None
         )
-        length_m = route.length_m()
-        times = TravelTimes(route)
-        offsets = {}
+        length_m, times = route.length_m(), TravelTimes(route)
+        offsets.append(
+            {
+                center: _offset_s(line, center, length_m, times)
+                for center in {center for center, _, _ in route_pieces}
+            }
+        )
+    earliest: dict[tuple[float, float], int] = {}
+    for route_offsets in offsets:
+        for center, offset in route_offsets.items():
+            earliest[center] = min(offset, earliest.get(center, offset))
+    centers = sorted(earliest, key=lambda center: (earliest[center], center))
+
+    point_index = {center: i for i, center in enumerate(centers)}
+    cells: list[Cell] = []
+    cell_index: dict[tuple, int] = {}  # (center, fips) -> index into cells
+    route_cells = []
+    for route_pieces, route_offsets in zip(pieces, offsets, strict=True):
         this_route = []
         for center, county, piece in route_pieces:
             key = (center, county.fips)
             if key not in cell_index:
                 cell_index[key] = len(cells)
                 cells.append(Cell(point_index[center], county, piece))
-            if center not in offsets:
-                offsets[center] = _offset_s(line, center, length_m, times)
-            this_route.append(RouteCell(cell_index[key], offsets[center]))
+            this_route.append(RouteCell(cell_index[key], route_offsets[center]))
         route_cells.append(this_route)
-    return WeatherGrid(now, start, weight_lb, step, points, cells, route_cells)
+    return WeatherGrid(now, start, weight_lb, step, centers, cells, route_cells)
+
+
+class ForecastBatch(NamedTuple):
+    """Forecasts for some of a grid's points, as (index into the points, GridPoint)."""
+
+    points: list[tuple[int, GridPoint]]
+
+
+class FailedBatch(NamedTuple):
+    indices: list[int]  # points left without a forecast
+    detail: str
+
+
+def forecast_events(
+    centers: list[tuple[float, float]], start: int, weight_lb: float
+) -> Iterator[ForecastBatch | FailedBatch]:
+    """Forecasts for `centers`, in batches of LOCATIONS_PER_REQUEST as they become
+    available: cached ones first (in order), then one Open-Meteo request per batch of
+    the rest, PARALLEL_REQUESTS at a time, each yielded as soon as it completes. A
+    failed request yields a FailedBatch; the others still come."""
+
+    def batch(indices: list[int], hourly: dict) -> ForecastBatch:
+        return ForecastBatch(
+            [
+                (i, GridPoint(*centers[i], _series(hourly[centers[i]], start), weight_lb))
+                for i in indices
+            ]
+        )
+
+    keys = {center: _cache_key(center) for center in centers}
+    cached = cache.get_many(keys.values())
+    hourly = {center: cached[key] for center, key in keys.items() if key in cached}
+
+    ready = [i for i, center in enumerate(centers) if center in hourly]
+    for chunk in _chunks(ready):
+        yield batch(chunk, hourly)
+
+    missing = [i for i, center in enumerate(centers) if center not in hourly]
+    pool = ThreadPoolExecutor(PARALLEL_REQUESTS)
+    try:
+        futures = {
+            pool.submit(_fetch_batch, [centers[i] for i in chunk]): chunk
+            for chunk in _chunks(missing)
+        }
+        for future in as_completed(futures):
+            chunk = futures[future]
+            try:
+                fetched = future.result()
+            except UpstreamError as exc:
+                yield FailedBatch(chunk, exc.message)
+                continue
+            yield batch(chunk, fetched)
+    finally:
+        # The client may leave mid-stream: drop requests that have not started.
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
+def _chunks(items: list) -> list[list]:
+    return [
+        items[i : i + LOCATIONS_PER_REQUEST] for i in range(0, len(items), LOCATIONS_PER_REQUEST)
+    ]
 
 
 def grid_center(lat: float, lon: float, step: float) -> tuple[float, float]:
@@ -247,24 +321,29 @@ def _offset_s(
 
 def _fetch(centers) -> dict[tuple[float, float], dict]:
     """Open-Meteo's hourly data for each center; cached centers skip the request."""
-    keys = {center: "weather:{}:{}".format(*center) for center in centers}
+    keys = {center: _cache_key(center) for center in centers}
     cached = cache.get_many(keys.values())
     hourly = {center: cached[key] for center, key in keys.items() if key in cached}
 
     missing = [center for center in centers if center not in hourly]
-    batches = [
-        missing[i : i + LOCATIONS_PER_REQUEST]
-        for i in range(0, len(missing), LOCATIONS_PER_REQUEST)
-    ]
     with ThreadPoolExecutor(PARALLEL_REQUESTS) as pool:
-        responses = list(pool.map(_request, batches))
-    for batch, locations in zip(batches, responses, strict=True):
-        if len(locations) != len(batch):
-            raise UpstreamError("Weather API returned the wrong number of locations")
-        for center, location in zip(batch, locations, strict=True):
-            hourly[center] = location["hourly"]
-    cache.set_many({keys[center]: hourly[center] for center in missing}, CACHE_SECONDS)
+        for fetched in pool.map(_fetch_batch, _chunks(missing)):
+            hourly.update(fetched)
     return hourly
+
+
+def _fetch_batch(batch: list[tuple[float, float]]) -> dict[tuple[float, float], dict]:
+    """One Open-Meteo request for `batch`; the results are cached."""
+    locations = _request(batch)
+    if len(locations) != len(batch):
+        raise UpstreamError("Weather API returned the wrong number of locations")
+    hourly = {center: location["hourly"] for center, location in zip(batch, locations, strict=True)}
+    cache.set_many({_cache_key(center): data for center, data in hourly.items()}, CACHE_SECONDS)
+    return hourly
+
+
+def _cache_key(center: tuple[float, float]) -> str:
+    return "weather:{}:{}".format(*center)
 
 
 def _request(batch: list[tuple[float, float]]) -> list[dict]:

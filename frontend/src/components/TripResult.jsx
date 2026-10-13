@@ -8,17 +8,20 @@ import Tabs from "./Tabs.jsx";
 // The routes from one request: the map with every route and the weather over all their
 // counties for a departure `departureHour` h from now (set in the second form), any
 // checkpoints from the second form, and the counties each route crosses (a tab each).
+// Counties, cells and forecasts stream in after the routes (`routeGrids`, `weather` and
+// `counties` are empty until then).
 export default function TripResult({ apiKey, data, departureHour, checkpoints }) {
-  const { routes, weather } = data;
+  const { routes, routeGrids, weather } = data;
   const [countyTab, setCountyTab] = useState("0"); // which route's counties are listed
 
   const forecasts = useMemo(
-    () => gridForecasts(weather, routes, departureHour),
-    [weather, routes, departureHour],
+    () => (weather && routeGrids ? gridForecasts(weather, routeGrids, departureHour) : []),
+    [weather, routeGrids, departureHour],
   );
+  // Keyed on the counties, not `data`: forecasts streaming in must not redraw shapes.
   const countyByFips = useMemo(
     () => new Map(data.counties.map((county) => [county.fips, county])),
-    [data],
+    [data.counties],
   );
 
   return (
@@ -37,17 +40,20 @@ export default function TripResult({ apiKey, data, departureHour, checkpoints })
           label="Counties per route"
           active={countyTab}
           onChange={setCountyTab}
-          tabs={routes.map((route, index) => ({
+          tabs={routes.map((_, index) => ({
             id: String(index),
             label: (
               <>
                 <span className="legend-line" style={{ background: routeColor(index) }} />
-                {routeName(index)} ({route.counties.length})
+                {routeName(index)}
+                {routeGrids && ` (${routeGrids[index].counties.length})`}
               </>
             ),
-            content: (
+            content: !routeGrids ? (
+              <p className="place-selected">Finding the counties along the route…</p>
+            ) : (
               <ol className="county-list" aria-label={`Counties on ${routeName(index)}`}>
-                {route.counties.map((fips) => {
+                {routeGrids[index].counties.map((fips) => {
                   const county = countyByFips.get(fips);
                   return (
                     <li key={fips}>

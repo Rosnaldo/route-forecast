@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { loadGoogleMaps } from "../lib/googleMaps.js";
-import { NO_FORECAST_COLOR, RISK_LEVELS, levelColor } from "../lib/risk.js";
+import { LOADING_COLOR, NO_FORECAST_COLOR, RISK_LEVELS, levelColor } from "../lib/risk.js";
 import { routeColor, routeLetter, routeName } from "../lib/routes.js";
 
 const HIGHLIGHT_COLOR = "#1d2433"; // hovered cell outline, departure/arrival dots
@@ -17,6 +17,7 @@ const timeFormat = new Intl.DateTimeFormat(undefined, {
 function describe(forecast, county) {
   const where = county ? `${county.name}, ${county.state}` : "";
   const when = `ETA ${timeFormat.format(new Date(forecast.eta * 1000))}`;
+  if (forecast.loading) return `Loading forecast · ${where}`;
   if (forecast.level == null) return `No forecast · ${where} · ${when}`;
   return (
     `${RISK_LEVELS[forecast.level].label} · ${where} · ${when} · ` +
@@ -90,7 +91,8 @@ function labelPoint(routes, index) {
 
 // Google map of the trip: every route drawn the same way in its own color with its
 // letter, and the weather-risk heat map on a grid over the counties all routes cross.
-// `forecasts` holds each grid cell's forecast, in weather.cells order.
+// `forecasts` holds each grid cell's forecast, in weather.cells order; `weather` is null
+// (no cells, no counties) until the grid has streamed in: the routes are drawn first.
 export default function RouteMap({
   apiKey,
   routes,
@@ -251,6 +253,7 @@ export default function RouteMap({
     if (!map.current) return;
     const { map: instance } = map.current;
     instance.data.forEach((feature) => instance.data.remove(feature));
+    if (!weather) return;
     instance.data.addGeoJson({
       type: "FeatureCollection",
       features: [
@@ -269,15 +272,19 @@ export default function RouteMap({
       ],
     });
     setHovered(null);
-  }, [weather, countyByFips, mapCount]);
+    // The cells' shapes only: streamed forecasts recolor them (below), never redraw.
+  }, [weather?.cells, countyByFips, mapCount]);
 
   // Color the cells for the departure time; also once they are added.
   useEffect(() => {
     map.current?.map.data.setStyle((feature) =>
       feature.getProperty("kind") === "cell"
         ? {
-            fillColor: levelColor(forecasts[feature.getProperty("index")]?.level),
-            fillOpacity: 0.7,
+            fillColor: forecasts[feature.getProperty("index")]?.loading
+              ? LOADING_COLOR
+              : levelColor(forecasts[feature.getProperty("index")]?.level),
+            // Loading cells stay light so the map shows through until colored.
+            fillOpacity: forecasts[feature.getProperty("index")]?.loading ? 0.35 : 0.7,
             strokeWeight: 0,
             zIndex: 1,
           }
@@ -294,15 +301,16 @@ export default function RouteMap({
   }, [forecasts, mapCount]);
 
   if (error) return <p className="notice">{error}</p>;
-  const hasNoForecast = forecasts.some((forecast) => forecast.level == null);
-  const hoveredFips = hovered == null ? null : weather.cells[hovered]?.fips;
+  const loadingCount = forecasts.filter((forecast) => forecast.loading).length;
+  const hasNoForecast = forecasts.some((forecast) => forecast.level == null && !forecast.loading);
+  const hoveredFips = hovered == null ? null : weather?.cells[hovered]?.fips;
   return (
     <figure className="route-map">
       <div
         className="route-map-canvas"
         ref={container}
         role="img"
-        aria-label={`Weather risk map of ${routes.length} routes crossing ${countyByFips.size} counties`}
+        aria-label={`Weather risk map of ${routes.length} routes`}
       />
       <figcaption className="route-map-legend">
         {routes.map((_, index) => (
@@ -322,6 +330,12 @@ export default function RouteMap({
             <span className="legend-item">
               <span className="legend-checkpoint" /> Checkpoint with arrival time (hover for
               details)
+            </span>
+          )}
+          {loadingCount > 0 && (
+            <span className="legend-item">
+              <span className="legend-swatch" style={{ background: LOADING_COLOR }} />
+              Loading forecast
             </span>
           )}
           {hasNoForecast && (

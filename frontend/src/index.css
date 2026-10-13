@@ -125,6 +125,11 @@ a { color: var(--accent); }
   border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 .choice input { accent-color: var(--accent); margin: 0; }
+.link-button {
+  font: inherit; font-weight: 700; color: var(--accent); background: none; border: 0;
+  padding: 0; cursor: pointer; text-decoration: underline;
+}
+.map-slider input:disabled { opacity: 0.5; cursor: not-allowed; }
 .secondary {
   font: inherit; font-weight: 700; color: var(--fg); background: none; cursor: pointer;
   border: 1px solid color-mix(in srgb, var(--muted) 45%, transparent);

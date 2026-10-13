@@ -1,18 +1,25 @@
 import csv
+import json
 import time
-from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 
+from asgiref.sync import sync_to_async
 from django.conf import settings
+from django.core.handlers.asgi import ASGIRequest
+from django.http import JsonResponse, StreamingHttpResponse
+from django.views import View
 from rest_framework import serializers
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.core.exceptions import NotFoundError
+
 from .checkpoints import Trip, cached_route_risks, load_trip, save_trip, trip_checkpoints
-from .counties import counties_along
+from .grid import build_grid, ensure_grid
 from .recommendation import recommend
 from .routing import compute_routes
-from .weather import FORECAST_HOURS, weather_grid
+from .weather import FORECAST_HOURS, FailedBatch, forecast_events
 
 EXAMPLE_ROUTES_FILE = settings.BASE_DIR / "example_routes.csv"
 WEIGHT_MIN_LB = 1_000  # cargo weight accepted by the route endpoint
@@ -69,17 +76,20 @@ class WeatherCellSerializer(serializers.Serializer):
 
 
 class WeatherGridSerializer(serializers.Serializer):
-    """Hourly forecasts and grid cells, each sent once and shared by the routes."""
+    """The grid's layout; the forecasts for its points arrive from the weather stream."""
 
     now = serializers.IntegerField()
     start = serializers.IntegerField()
     hours = serializers.SerializerMethodField()
     weight_lb = serializers.FloatField()
-    points = GridPointSerializer(many=True)
+    points = serializers.SerializerMethodField()  # [{lat, lon}], in streaming order
     cells = WeatherCellSerializer(many=True)
 
     def get_hours(self, grid) -> int:
         return FORECAST_HOURS
+
+    def get_points(self, grid) -> list[dict]:
+        return [{"lat": lat, "lon": lon} for lat, lon in grid.points]
 
 
 class RouteCellSerializer(serializers.Serializer):
@@ -95,24 +105,37 @@ class RouteSerializer(serializers.Serializer):
     description = serializers.CharField()
     source = serializers.CharField()  # "google", or a fallback: "avoid_highways" / "detour"
     points = serializers.ListField(  # [lat, lon], simplified for drawing
-        source="route.display_points", child=serializers.ListField(child=serializers.FloatField())
+        source="display_points", child=serializers.ListField(child=serializers.FloatField())
     )
+
+
+class RouteResponseSerializer(serializers.Serializer):
+    """Google's routes, returned as soon as they are known: counties, grid and forecasts
+    follow on the weather stream (WeatherStreamView)."""
+
+    trip_id = serializers.CharField()  # for the stream, checkpoints and recommendation
+    weight_lb = serializers.FloatField()
+    routes = RouteSerializer(many=True)  # fastest first
+
+
+class RouteGridSerializer(serializers.Serializer):
     counties = serializers.ListField(child=serializers.CharField())  # fips, in travel order
     cells = RouteCellSerializer(many=True)
 
 
-class RouteResponseSerializer(serializers.Serializer):
-    trip_id = serializers.CharField()  # for the checkpoints endpoint, valid for an hour
-    routes = RouteSerializer(many=True)  # fastest first
-    counties = CountySerializer(many=True)  # every county any route crosses, once
-    weather = WeatherGridSerializer()
+class GridEventSerializer(WeatherGridSerializer):
+    """The stream's first event: the grid's layout, the counties crossed (each once) and,
+    per route (same order as the route response), its counties and cells."""
+
+    counties = CountySerializer(many=True)
+    routes = RouteGridSerializer(many=True)
 
 
 class RouteView(APIView):
     """Up to three driving routes between departure and arrival (Google's, plus fallbacks
-    when it has fewer): [lat, lon] points and counties crossed for each, and the hourly
-    weather risk for the next FORECAST_HOURS on a grid over those counties, for a
-    truck carrying `weight_lb` of cargo."""
+    when it has fewer), returned as soon as Google answers. The counties they cross and
+    the weather risk on a grid over them, for a truck carrying `weight_lb` of cargo,
+    come from the weather stream for the returned `trip_id`."""
 
     serializer_class = RouteRequestSerializer
 
@@ -123,28 +146,8 @@ class RouteView(APIView):
             params.validated_data[key] for key in ("departure", "arrival", "weight_lb")
         )
         routes = compute_routes(departure, arrival)
-        # Routes are independent: find their counties in parallel (shapely's geometry
-        # work runs outside the GIL).
-        with ThreadPoolExecutor(len(routes)) as pool:
-            counties = list(pool.map(lambda route: counties_along(route.points), routes))
-        weather = weather_grid(list(zip(routes, counties, strict=True)), weight_lb)
-        trip_id = save_trip(Trip(routes, weight_lb, weather.step))
-        data = {
-            "trip_id": trip_id,
-            "routes": [
-                {
-                    **vars(route),
-                    "route": route,
-                    "counties": [county.fips for county in route_counties],
-                    "cells": cells,
-                }
-                for route, route_counties, cells in zip(
-                    routes, counties, weather.route_cells, strict=True
-                )
-            ],
-            "counties": list({c.fips: c for cs in counties for c in cs}.values()),
-            "weather": weather,
-        }
+        trip_id = save_trip(Trip(routes, weight_lb))
+        data = {"trip_id": trip_id, "weight_lb": weight_lb, "routes": routes}
         return Response(RouteResponseSerializer(data).data)
 
 
@@ -160,6 +163,89 @@ class TripDepartureSerializer(serializers.Serializer):
                 f"Departure must be within the next {FORECAST_HOURS} hours."
             )
         return value
+
+
+class StreamedPointSerializer(GridPointSerializer):
+    index = serializers.IntegerField()  # into the route response's weather.points
+
+
+class WeatherStreamView(View):
+    """Server-sent events for a computed trip: its grid, then its forecasts batch by
+    batch as they arrive (start of the trip first):
+
+        event: grid         data: {now, start, hours, weight_lb, points, cells, counties,
+                                   routes: [{counties, cells}]}
+        event: batch        data: {"points": [{index, lat, lon, wind_mph, ..., levels}]}
+        event: batch-error  data: {"indices": [...], "detail": "..."}
+        event: done         data: {"loaded": n, "failed": m}
+
+    A plain Django view: browsers' EventSource asks for text/event-stream, which DRF's
+    content negotiation would refuse."""
+
+    def get(self, request, version: str, trip_id: str):
+        try:
+            trip = load_trip(trip_id)
+        except NotFoundError as exc:
+            return JsonResponse({"code": exc.code, "detail": exc.message}, status=404)
+        events = self._events(trip_id, trip)
+        if isinstance(request, ASGIRequest):
+            # Under ASGI, Django would collect a plain generator whole before sending it.
+            events = _event_by_event(events)
+        response = StreamingHttpResponse(events, content_type="text/event-stream")
+        response["Cache-Control"] = "no-cache"
+        response["X-Accel-Buffering"] = "no"  # nginx: pass each event through at once
+        return response
+
+    def _events(self, trip_id: str, trip: Trip):
+        grid = build_grid(trip_id, trip)
+        yield _sse("grid", GridEventSerializer(_grid_event(grid)).data)
+        loaded = failed = 0
+        for event in forecast_events(list(grid.trip.points), grid.trip.start, trip.weight_lb):
+            if isinstance(event, FailedBatch):
+                failed += len(event.indices)
+                yield _sse("batch-error", {"indices": event.indices, "detail": event.detail})
+            else:
+                loaded += len(event.points)
+                points = [{"index": i, **_point_fields(point)} for i, point in event.points]
+                yield _sse("batch", {"points": StreamedPointSerializer(points, many=True).data})
+        yield _sse("done", {"loaded": loaded, "failed": failed})
+
+
+def _grid_event(grid) -> SimpleNamespace:
+    """GridEventSerializer's input: the weather grid plus the counties, per route too."""
+    weather, counties = grid.weather, grid.counties
+    return SimpleNamespace(
+        **vars(weather),
+        counties=list({c.fips: c for cs in counties for c in cs}.values()),
+        routes=[
+            {"counties": [c.fips for c in route_counties], "cells": cells}
+            for route_counties, cells in zip(counties, weather.route_cells, strict=True)
+        ],
+    )
+
+
+async def _event_by_event(events):
+    """An async iterator over a blocking generator: each event is produced in a worker
+    thread and sent as soon as it is ready."""
+    done = object()
+    while (event := await sync_to_async(next, thread_sensitive=False)(events, done)) is not done:
+        yield event
+
+
+def _point_fields(point) -> dict:
+    """A GridPoint's fields and series, for StreamedPointSerializer."""
+    return {
+        "lat": point.lat,
+        "lon": point.lon,
+        "wind_mph": point.wind_mph,
+        "rain_in_hr": point.rain_in_hr,
+        "snow_in_hr": point.snow_in_hr,
+        "levels": point.levels,
+    }
+
+
+def _sse(event: str, data) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, separators=(',', ':'))}\n\n"
 
 
 class CheckpointsRequestSerializer(TripDepartureSerializer):
@@ -206,7 +292,7 @@ class CheckpointsView(APIView):
         trip_id, distance_mi, departure = (
             params.validated_data[key] for key in ("trip_id", "distance_mi", "departure")
         )
-        trip = load_trip(trip_id)
+        trip = ensure_grid(trip_id, load_trip(trip_id))
         risks = cached_route_risks(trip_id, trip, departure.timestamp())
         checkpoints = trip_checkpoints(trip, distance_mi, departure.timestamp(), risks=risks)
         data = {"distance_mi": distance_mi, "departure": departure, "routes": checkpoints}
@@ -242,7 +328,8 @@ class RecommendationView(APIView):
         trip_id = params.validated_data["trip_id"]
         departure = params.validated_data["departure"]
         # Usually already computed by the checkpoints request for the same departure.
-        risks = cached_route_risks(trip_id, load_trip(trip_id), departure.timestamp())
+        trip = ensure_grid(trip_id, load_trip(trip_id))
+        risks = cached_route_risks(trip_id, trip, departure.timestamp())
         recommendation = recommend(risks)
         data = {
             "departure": departure,

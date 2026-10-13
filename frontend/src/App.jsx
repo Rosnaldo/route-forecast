@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import DistanceDepartureForm from "./components/DistanceDepartureForm.jsx";
 import ExampleRoutes from "./components/ExampleRoutes.jsx";
@@ -8,6 +8,7 @@ import Stepper from "./components/Stepper.jsx";
 import Tabs from "./components/Tabs.jsx";
 import TripResult from "./components/TripResult.jsx";
 import { WEIGHT_DEFAULT, WEIGHT_MAX, WEIGHT_MIN, WEIGHT_STEP, pounds } from "./lib/load.js";
+import useWeatherStream from "./lib/useWeatherStream.js";
 
 const apiKey = __GOOGLE_MAPS_API_KEY__;
 
@@ -33,7 +34,7 @@ function RouteSummary({ trip, data, loading, error }) {
         <p className="route-summary">
           {data.routes.length} {data.routes.length === 1 ? "route" : "routes"}
           {trip.expectedKm && ` (expected ~${trip.expectedKm.toLocaleString()} km)`} ·{" "}
-          {pounds(data.weather.weight_lb)} load
+          {pounds(data.weight_lb)} load
         </p>
       )}
     </div>
@@ -112,6 +113,38 @@ export default function App() {
   const [checkpointsError, setCheckpointsError] = useState(null);
   // Recommended route from the third endpoint, for the same trip and departure.
   const [recommendation, setRecommendation] = useState(null);
+
+  // The route response draws the map (route lines); the stream then brings the grid
+  // (counties, cells) and its forecasts. `routes` stays the route response's own list so
+  // the map is not rebuilt; the grid's per-route counties and cells are `routeGrids`.
+  const stream = useWeatherStream(data?.trip_id);
+  const { grid } = stream;
+  const weather = useMemo(() => {
+    if (!grid) return null;
+    const points = grid.points.map((point, i) =>
+      stream.series[i] ? { ...point, ...stream.series[i] } : point,
+    );
+    return { ...grid, points };
+  }, [grid, stream.series]);
+  const shown = useMemo(
+    () =>
+      data && {
+        ...data,
+        routeGrids: grid?.routes ?? null,
+        counties: grid?.counties ?? [],
+        weather,
+      },
+    [data, grid, weather],
+  );
+  const forecastStatus = {
+    state: stream.state,
+    loaded: stream.loaded,
+    failed: stream.failed,
+    total: grid?.points.length ?? 0,
+    hasGrid: Boolean(grid),
+    detail: stream.detail,
+    retry: stream.retry,
+  };
   const result = useRef(null);
 
   const draft = tripFrom(tab, { origin, destination, example });
@@ -277,9 +310,10 @@ export default function App() {
               disabled: !data, // reached by submitting the first form
               content: data && (
                 <DistanceDepartureForm
-                  weather={data.weather}
+                  weather={weather}
                   departureHour={departureHour}
                   onDepartureChange={changeDeparture}
+                  forecastStatus={forecastStatus}
                   loading={checkpointsLoading}
                   error={checkpointsError}
                   checkpoints={checkpoints}
@@ -309,7 +343,7 @@ export default function App() {
             <TripResult
               key={trip.id}
               apiKey={apiKey}
-              data={data}
+              data={shown}
               departureHour={departureHour}
               checkpoints={checkpoints}
             />

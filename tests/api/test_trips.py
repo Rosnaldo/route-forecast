@@ -1,16 +1,18 @@
 import io
 import json
 import urllib.error
+import zlib
 from datetime import UTC, datetime, timedelta
 from unittest import mock
 
 import pytest
+from shapely import box
 
 from apps.trips import checkpoints as checkpoints_module
 from apps.trips.checkpoints import Trip, load_trip, save_trip
 from apps.trips.counties import County, counties_along
 from apps.trips.routing import Point, Route, Step, decode_polyline
-from apps.trips.weather import Forecast, WeatherGrid
+from apps.trips.weather import Forecast
 
 URL = "/api/v1/trips/route/"
 DENVER = {"lat": 39.7392, "lon": -104.9903}
@@ -24,19 +26,6 @@ DECODED = [(38.5, -120.2), (40.7, -120.95), (43.252, -126.453)]
 @pytest.fixture(autouse=True)
 def _routes_key(settings):
     settings.GOOGLE_ROUTES_API_KEY = "test-key"
-
-
-@pytest.fixture(autouse=True)
-def _no_weather():
-    """The weather grid has its own tests (unit/test_weather.py); keep these offline."""
-
-    def grid(routes, weight_lb):
-        return WeatherGrid(
-            1_800_000_000, 1_799_998_400, weight_lb, 0.2, [], [], [[] for _ in routes]
-        )
-
-    with mock.patch("apps.trips.views.weather_grid", side_effect=grid) as weather:
-        yield weather
 
 
 def fake_urlopen(payload):
@@ -53,7 +42,7 @@ def test_decode_polyline():
     assert points[0].lat == 38.5 and points[0].lon == -120.2
 
 
-def test_route(api_client, _no_weather):
+def test_route(api_client):
     payload = {
         "routes": [
             {
@@ -78,49 +67,29 @@ def test_route(api_client, _no_weather):
             },
         ]
     }
-    denver = County("08031", "Denver", "CO")
-    jefferson = County("08059", "Jefferson", "CO")
     with (
         fake_urlopen(payload) as urlopen,
-        # Routes are looked up in parallel: answer by route (point count), not call order.
-        mock.patch(
-            "apps.trips.views.counties_along",
-            side_effect=lambda points: [denver] if len(points) == 3 else [denver, jefferson],
-        ) as counties,
+        mock.patch("apps.trips.grid.counties_along") as counties,
     ):
         response = api_client.post(URL, {"departure": DENVER, "arrival": VAIL, "weight_lb": 20_000})
 
     assert response.status_code == 200
     body = response.json()
-    # The trip is kept for the checkpoints endpoint.
+    # Only Google's routes: counties, grid and forecasts come from the weather stream.
+    assert body.keys() == {"trip_id", "weight_lb", "routes"}
+    assert body["weight_lb"] == 20_000
+    assert [
+        (r["description"], r["distance_m"], r["duration_s"], r["source"]) for r in body["routes"]
+    ] == [("I-70 W", 158000, 6300, "google"), ("US-6 W", 170000, 7200, "google")]
+    assert body["routes"][0]["points"] == [list(p) for p in DECODED]
+    counties.assert_not_called()
+    # The trip is kept for the stream, checkpoints and recommendation; no grid yet.
     trip = load_trip(body["trip_id"])
     assert [r.description for r in trip.routes] == ["I-70 W", "US-6 W"]
-    assert (trip.weight_lb, trip.step) == (20_000, 0.2)
+    assert (trip.weight_lb, trip.step, trip.points) == (20_000, 0, ())
     assert trip.routes[0].steps == (Step(1000, 120), Step(157000, 6180))  # for travel times
     assert isinstance(trip.routes[0].points[0], Point)
     assert trip.routes[1].steps == ()
-    assert [
-        (r["description"], r["distance_m"], r["duration_s"], r["counties"]) for r in body["routes"]
-    ] == [
-        ("I-70 W", 158000, 6300, ["08031"]),
-        ("US-6 W", 170000, 7200, ["08031", "08059"]),
-    ]
-    assert body["routes"][0]["points"] == [list(p) for p in DECODED]
-    assert body["routes"][0]["cells"] == []
-    # Counties crossed by any route, each once.
-    assert [c["fips"] for c in body["counties"]] == ["08031", "08059"]
-    assert body["weather"] == {
-        "now": 1_800_000_000,
-        "start": 1_799_998_400,
-        "hours": 48,
-        "weight_lb": 20_000,
-        "points": [],
-        "cells": [],
-    }
-    assert counties.call_count == 2
-    routes, weight = _no_weather.call_args.args
-    assert [route_counties for _, route_counties in routes] == [[denver], [denver, jefferson]]
-    assert weight == 20_000
     sent = json.loads(urlopen.call_args_list[0].args[0].data)  # the main request
     assert sent["origin"]["location"]["latLng"] == {"latitude": 39.7392, "longitude": -104.9903}
     assert sent["travelMode"] == "DRIVE"
@@ -394,3 +363,109 @@ def test_recommendation_validation(api_client):
     )
     assert response.status_code == 400
     assert response.json().keys() == {"departure"}
+
+
+def read_events(response) -> list[tuple[str, dict]]:
+    """(event, data) pairs from a server-sent events response."""
+    text = b"".join(response.streaming_content).decode()
+    events = []
+    for block in text.strip().split("\n\n"):
+        fields = dict(line.split(": ", 1) for line in block.splitlines())
+        events.append((fields["event"], json.loads(fields["data"])))
+    return events
+
+
+# A 2 x 2 degree "county" and a route across it: 100 grid cells of 0.2 degrees.
+SQUARE = County("99001", "Square", "ZZ", box(-105.0, 39.0, -103.0, 41.0))
+ACROSS = Route(171_000, 7200, [Point(40.0, -105.0), Point(40.0, -103.0)])
+HOURLY = {
+    "time": [1_800_000_000 - 1_800_000_000 % 3600 + h * 3600 for h in range(50)],
+    "wind_speed_10m": [40] * 50,
+    "rain": [0] * 50,
+    "snowfall": [0] * 50,
+}
+
+
+def fake_open_meteo():
+    def urlopen(url, timeout):
+        count = url.count("%2C", 0, url.index("longitude")) + 1  # latitudes in the request
+        return io.BytesIO(json.dumps([{"hourly": HOURLY}] * count).encode())
+
+    return mock.patch("apps.trips.weather.urllib.request.urlopen", side_effect=urlopen)
+
+
+def stream(api_client, trip_id, **headers):
+    with (
+        fake_open_meteo(),
+        mock.patch("apps.trips.grid.counties_along", return_value=[SQUARE]),
+        mock.patch("apps.trips.weather.time.time", return_value=1_800_000_000),
+    ):
+        response = api_client.get(
+            f"/api/v1/trips/{trip_id}/weather/", HTTP_ACCEPT="text/event-stream", **headers
+        )
+        return response, read_events(response)
+
+
+def test_weather_stream_sends_the_grid_then_the_forecasts(api_client):
+    trip_id = save_trip(Trip([ACROSS], 45_000))
+    response, events = stream(api_client, trip_id)
+    assert response.status_code == 200
+    assert response["Content-Type"] == "text/event-stream"
+    assert response["X-Accel-Buffering"] == "no"
+    # The grid first, then 100 forecasts in batches of 80 + 20, then done.
+    assert [name for name, _ in events] == ["grid", "batch", "batch", "done"]
+
+    grid = events[0][1]
+    assert len(grid["points"]) == len(grid["cells"]) == 100
+    assert [c["fips"] for c in grid["counties"]] == ["99001"]
+    (route,) = grid["routes"]
+    assert route["counties"] == ["99001"]
+    assert len(route["cells"]) == 100
+    # Points come in the order the truck reaches them: westernmost (departure) first.
+    assert grid["points"][0]["lon"] < grid["points"][-1]["lon"]
+
+    indices = sorted(p["index"] for _, data in events[1:3] for p in data["points"])
+    assert indices == list(range(100))
+    first = events[1][1]["points"][0]
+    assert first["levels"][0] == 3  # 40 mph over 40,000 lb: Severe
+    assert len(first["wind_mph"]) == 49
+    assert events[-1] == ("done", {"loaded": 100, "failed": 0})
+
+    # The trip now has its grid, for the checkpoints and the recommendation.
+    trip = load_trip(trip_id)
+    assert (trip.step, len(trip.points)) == (0.2, 100)
+
+
+def test_weather_stream_is_gzipped_event_by_event(api_client):
+    trip_id = save_trip(Trip([ACROSS], 20_000))
+    with (
+        fake_open_meteo(),
+        mock.patch("apps.trips.grid.counties_along", return_value=[SQUARE]),
+    ):
+        response = api_client.get(
+            f"/api/v1/trips/{trip_id}/weather/",
+            HTTP_ACCEPT="text/event-stream",
+            HTTP_ACCEPT_ENCODING="gzip",
+        )
+        chunks = list(response.streaming_content)
+    assert response["Content-Encoding"] == "gzip"
+    # Each event is flushed on its own: every chunk decompresses on arrival.
+    decompressor = zlib.decompressobj(31)
+    text = "".join(decompressor.decompress(chunk).decode() for chunk in chunks)
+    names = [line[7:] for line in text.splitlines() if line.startswith("event: ")]
+    assert names == ["grid", "batch", "batch", "done"]
+
+
+def test_checkpoints_build_the_grid_if_the_stream_did_not(api_client):
+    trip_id = save_trip(Trip([ACROSS], 20_000))
+    body = checkpoints_body(trip_id)
+    with fake_open_meteo(), mock.patch("apps.trips.grid.counties_along", return_value=[SQUARE]):
+        response = api_client.post(CHECKPOINTS_URL, body, format="json")
+    assert response.status_code == 200
+    assert load_trip(trip_id).step == 0.2
+
+
+def test_weather_stream_for_an_unknown_trip(api_client):
+    response = api_client.get("/api/v1/trips/missing/weather/")
+    assert response.status_code == 404
+    assert response.json()["code"] == "not_found"
