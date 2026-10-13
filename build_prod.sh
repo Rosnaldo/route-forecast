@@ -1,17 +1,17 @@
 #!/bin/bash
 
-# Rebuilds the dev backend image (shop-backend:dev, docker-compose.yml's `backend`).
-# Source code is bind-mounted at runtime, so this only needs to run after Python
-# dependencies change (pyproject.toml / uv.lock), not on every code change.
-# Pass --up to also recreate the running backend container with the new image.
+# Rebuilds the production backend image (shop-backend:prod, docker-compose.prod.yml's
+# `backend`) and restarts the stack with it. The prod image contains the code itself
+# (no bind mount), so run this after every pull that changes the backend.
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
-echo "Building the backend image (docker/backend/Dockerfile, target dev)..."
-docker compose build backend
-echo "Image shop-backend:dev built successfully!"
+COMPOSE=(docker compose -f docker-compose.prod.yml)
 
-if [[ "${1:-}" == "--up" ]]; then
-  docker compose up -d --no-deps backend
-fi
+echo "Building the backend image (docker/backend/Dockerfile, target runtime)..."
+"${COMPOSE[@]}" build backend
+echo "Image shop-backend:prod built successfully!"
+
+# Recreates only what changed: the backend, plus nginx when its config changed.
+"${COMPOSE[@]}" up -d
