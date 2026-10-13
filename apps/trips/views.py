@@ -7,8 +7,9 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .checkpoints import Trip, load_trip, save_trip, trip_checkpoints
+from .checkpoints import Trip, load_trip, route_risks, save_trip, trip_checkpoints
 from .counties import counties_along
+from .recommendation import recommend
 from .routing import compute_routes
 from .weather import FORECAST_HOURS, weather_grid
 
@@ -143,9 +144,8 @@ class RouteView(APIView):
         return Response(RouteResponseSerializer(data).data)
 
 
-class CheckpointsRequestSerializer(serializers.Serializer):
+class TripDepartureSerializer(serializers.Serializer):
     trip_id = serializers.CharField(max_length=64)  # from the route endpoint
-    distance_mi = serializers.ChoiceField(choices=[10, 25, 50])  # gap between checkpoints
     departure = serializers.DateTimeField()  # within the forecast window
 
     def validate_departure(self, value):
@@ -156,6 +156,10 @@ class CheckpointsRequestSerializer(serializers.Serializer):
                 f"Departure must be within the next {FORECAST_HOURS} hours."
             )
         return value
+
+
+class CheckpointsRequestSerializer(TripDepartureSerializer):
+    distance_mi = serializers.ChoiceField(choices=[10, 25, 50])  # gap between checkpoints
 
 
 class CheckpointSerializer(serializers.Serializer):
@@ -172,16 +176,23 @@ class CheckpointSerializer(serializers.Serializer):
     is_arrival = serializers.BooleanField()
 
 
+class RouteCheckpointsSerializer(serializers.Serializer):
+    checkpoints = CheckpointSerializer(many=True)
+    # Miles at each risk level when the truck gets there, segment by segment along the
+    # route: low, moderate, high, severe, no_travel, and no_forecast (beyond the window).
+    miles_by_level = serializers.DictField(child=serializers.FloatField())
+
+
 class CheckpointsResponseSerializer(serializers.Serializer):
     distance_mi = serializers.IntegerField()
     departure = serializers.DateTimeField()
-    routes = serializers.ListField(child=CheckpointSerializer(many=True))  # route order
+    routes = RouteCheckpointsSerializer(many=True)  # route order
 
 
 class CheckpointsView(APIView):
     """Checkpoints every `distance_mi` miles along each route of a computed trip, with
     the expected travel time to each and the weather risk when the truck gets there,
-    leaving at `departure`."""
+    leaving at `departure`; plus each route's miles at each risk level."""
 
     serializer_class = CheckpointsRequestSerializer
 
@@ -195,6 +206,43 @@ class CheckpointsView(APIView):
         checkpoints = trip_checkpoints(trip, distance_mi, departure.timestamp())
         data = {"distance_mi": distance_mi, "departure": departure, "routes": checkpoints}
         return Response(CheckpointsResponseSerializer(data).data)
+
+
+class RouteScoreSerializer(serializers.Serializer):
+    route = serializers.IntegerField()  # index in the route endpoint's routes
+    severe_miles = serializers.FloatField()  # Severe + No Travel
+    high_miles = serializers.FloatField()
+    average_level = serializers.FloatField(allow_null=True)  # 0-4; null: no forecast
+    travel_s = serializers.IntegerField()  # breaks included
+
+
+class RecommendationResponseSerializer(serializers.Serializer):
+    departure = serializers.DateTimeField()
+    recommended = serializers.IntegerField()  # index in the route endpoint's routes
+    # The criterion that put the recommendation ahead of the runner-up (one of
+    # recommendation.CRITERIA), "tie", or null with a single route.
+    decided_by = serializers.CharField(allow_null=True)
+    ranking = RouteScoreSerializer(many=True)  # best first
+
+
+class RecommendationView(APIView):
+    """The route to take for a computed trip leaving at `departure`: routes ranked by
+    Severe miles, High miles, average risk, then travel time (see recommendation.py)."""
+
+    serializer_class = TripDepartureSerializer
+
+    def post(self, request: Request, version: str) -> Response:
+        params = TripDepartureSerializer(data=request.data)
+        params.is_valid(raise_exception=True)
+        trip = load_trip(params.validated_data["trip_id"])
+        departure = params.validated_data["departure"]
+        recommendation = recommend(route_risks(trip, departure.timestamp()))
+        data = {
+            "departure": departure,
+            "recommended": recommendation.ranking[0].route,
+            **recommendation._asdict(),
+        }
+        return Response(RecommendationResponseSerializer(data).data)
 
 
 class ExampleRoutesView(APIView):

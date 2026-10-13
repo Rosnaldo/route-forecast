@@ -268,7 +268,16 @@ def test_checkpoints(api_client):
     assert response.status_code == 200
     body = response.json()
     assert body["distance_mi"] == 25
-    (route,) = body["routes"]
+    ((route, miles),) = ((r["checkpoints"], r["miles_by_level"]) for r in body["routes"])
+    # Calm forecast everywhere: the whole route (69.1 mi) is Low.
+    assert miles == {
+        "low": 69.1,
+        "moderate": 0,
+        "high": 0,
+        "severe": 0,
+        "no_travel": 0,
+        "no_forecast": 0,
+    }
     assert [round(c["elapsed_s"] / 60) for c in route] == [
         24,
         48,
@@ -309,3 +318,49 @@ def test_checkpoints_validation(api_client, overrides):
     response = api_client.post(CHECKPOINTS_URL, body, format="json")
     assert response.status_code == 400
     assert response.json().keys() == {next(iter(overrides))}
+
+
+RECOMMENDATION_URL = "/api/v1/trips/recommendation/"
+
+
+def test_recommendation(api_client):
+    # Two routes over the same calm-then-windy forecast: the shorter one has fewer High
+    # miles and wins on criterion 2.
+    short = Route(55_000, 0, [Point(0.0, 0.0), Point(0.0, 0.5)])
+    long = Route(111_000, 0, [Point(0.0, 0.0), Point(0.0, 1.0)])
+    trip_id = save_trip(Trip([long, short], 20_000, 0.2))
+    hours = [Forecast(40, 0, 0)] * 49  # 40 mph: High everywhere
+    with mock.patch(
+        "apps.trips.checkpoints.hourly_forecasts",
+        side_effect=lambda centers, start: dict.fromkeys(centers, hours),
+    ):
+        body = checkpoints_body(trip_id)
+        del body["distance_mi"]
+        response = api_client.post(RECOMMENDATION_URL, body, format="json")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["recommended"] == 1
+    assert data["decided_by"] == "high_miles"
+    assert [score["route"] for score in data["ranking"]] == [1, 0]
+    assert data["ranking"][0] == {
+        "route": 1,
+        "severe_miles": 0,
+        "high_miles": pytest.approx(34.5, abs=0.1),
+        "average_level": 2,
+        "travel_s": pytest.approx(55_597 / (100_000 / 3600), abs=2),  # fallback 100 km/h
+    }
+
+
+def test_recommendation_for_an_unknown_trip(api_client):
+    body = checkpoints_body("missing")
+    del body["distance_mi"]
+    assert api_client.post(RECOMMENDATION_URL, body, format="json").status_code == 404
+
+
+def test_recommendation_validation(api_client):
+    response = api_client.post(
+        RECOMMENDATION_URL, {"trip_id": "x", "departure": "2020-01-01T00:00:00Z"}, format="json"
+    )
+    assert response.status_code == 400
+    assert response.json().keys() == {"departure"}

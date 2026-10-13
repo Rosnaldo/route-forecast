@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import DistanceDepartureForm from "./components/DistanceDepartureForm.jsx";
 import ExampleRoutes from "./components/ExampleRoutes.jsx";
 import PlaceInput from "./components/PlaceInput.jsx";
+import RecommendationStep from "./components/RecommendationStep.jsx";
 import Stepper from "./components/Stepper.jsx";
 import Tabs from "./components/Tabs.jsx";
 import TripResult from "./components/TripResult.jsx";
@@ -102,13 +103,15 @@ export default function App() {
   const [data, setData] = useState(null); // the endpoint's response: routes and weather
   const [loading, setLoading] = useState(false);
   const [routeError, setRouteError] = useState(null);
-  const [step, setStep] = useState(0); // 0: route form, 1: distance & departure form
+  const [step, setStep] = useState(0); // 0: route, 1: distance & departure, 2: recommendation
   // Departure in hours from now; set in the second form, drives the map's heat map.
   const [departureHour, setDepartureHour] = useState(0);
   // Checkpoints from the second endpoint, for the departure they were requested with.
   const [checkpoints, setCheckpoints] = useState(null);
   const [checkpointsLoading, setCheckpointsLoading] = useState(false);
   const [checkpointsError, setCheckpointsError] = useState(null);
+  // Recommended route from the third endpoint, for the same trip and departure.
+  const [recommendation, setRecommendation] = useState(null);
   const result = useRef(null);
 
   const draft = tripFrom(tab, { origin, destination, example });
@@ -145,6 +148,7 @@ export default function App() {
         setData(data);
         setDepartureHour(0); // new forecasts: start from leaving now
         setCheckpoints(null);
+        setRecommendation(null);
         setLoading(false);
         setStep(1); // the routes are in: on to the second form
       })
@@ -162,31 +166,42 @@ export default function App() {
   const changeDeparture = (hours) => {
     setDepartureHour(hours);
     setCheckpoints(null);
+    setRecommendation(null);
     setCheckpointsError(null);
   };
 
-  // Second form: checkpoints every distanceMi miles along each route, leaving at departure.
+  // Second form: checkpoints every distanceMi miles along each route, leaving at departure,
+  // then the recommended route for that departure.
   const submitDistanceDeparture = ({ distanceMi, departure }) => {
+    const post = (path, body) =>
+      fetch(`/api/v1/trips/${path}/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          trip_id: data.trip_id,
+          departure: departure.toISOString(),
+          ...body,
+        }),
+      }).then(async (response) => {
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.detail ?? JSON.stringify(result));
+        return result;
+      });
+
     setCheckpointsLoading(true);
     setCheckpointsError(null);
-    fetch("/api/v1/trips/checkpoints/", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        trip_id: data.trip_id,
-        distance_mi: distanceMi,
-        departure: departure.toISOString(),
-      }),
-    })
-      .then(async (response) => {
-        const body = await response.json();
-        if (!response.ok) throw new Error(body.detail ?? JSON.stringify(body));
-        setCheckpoints(body);
+    setCheckpoints(null);
+    setRecommendation(null);
+    post("checkpoints", { distance_mi: distanceMi })
+      .then((result) => {
+        setCheckpoints(result);
+        return post("recommendation", {});
       })
-      .catch((err) => {
-        setCheckpoints(null);
-        setCheckpointsError(err.message);
+      .then((result) => {
+        setRecommendation(result);
+        setStep(2); // on to the recommendation
       })
+      .catch((err) => setCheckpointsError(err.message))
       .finally(() => setCheckpointsLoading(false));
   };
 
@@ -270,6 +285,18 @@ export default function App() {
                   checkpoints={checkpoints}
                   onBack={() => setStep(0)}
                   onSubmit={submitDistanceDeparture}
+                />
+              ),
+            },
+            {
+              id: "recommendation",
+              label: "Recommendation",
+              disabled: !recommendation, // reached by submitting the second form
+              content: recommendation && checkpoints && (
+                <RecommendationStep
+                  recommendation={recommendation}
+                  checkpoints={checkpoints}
+                  onBack={() => setStep(1)}
                 />
               ),
             },

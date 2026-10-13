@@ -7,7 +7,8 @@ const DISTANCES_MI = [10, 25, 50];
 // Second step: the gap between checkpoints (10 / 25 / 50 miles) and the departure time,
 // as hours from now within the forecast window of `weather`. The departure also drives
 // the map, so its value lives in the parent. Calls onSubmit({ distanceMi, departure }),
-// departure a Date; `checkpoints` is the last result, `loading`/`error` its request.
+// departure a Date; `checkpoints` is the last result, `loading`/`error` the requests
+// (checkpoints, then the recommendation shown in the next step).
 export default function DistanceDepartureForm({
   weather,
   departureHour,
@@ -61,11 +62,14 @@ export default function DistanceDepartureForm({
       </div>
       {error && <p className="notice">{error}</p>}
       {checkpoints && (
-        <p className="place-selected" aria-live="polite">
-          {checkpoints.routes.reduce((sum, route) => sum + route.length, 0)} checkpoints every{" "}
-          {checkpoints.distance_mi} miles on the map, each with its arrival time. Hover one
-          for travel time and forecast.
-        </p>
+        <>
+          <p className="place-selected" aria-live="polite">
+            {checkpoints.routes.reduce((sum, route) => sum + route.checkpoints.length, 0)}{" "}
+            checkpoints every {checkpoints.distance_mi} miles on the map, each with its arrival
+            time. Hover one for travel time and forecast.
+          </p>
+
+        </>
       )}
     </form>
   );

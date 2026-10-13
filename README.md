@@ -14,3 +14,8 @@ route.
 - Weather factors: wind (mph); rain (in/hr); snow (in/hr)
 - 30-minute stop after every 8 hours of driving.
 - velocity 100 km/h used as fallback
+
+
+```
+average = Σ (level × piece length) ÷ Σ (piece length)      over pieces that have a forecast
+```

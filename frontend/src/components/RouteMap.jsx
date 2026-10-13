@@ -207,7 +207,7 @@ export default function RouteMap({
     const { maps, map: instance, Marker, info } = map.current;
     const departure = new Date(checkpoints.departure);
     const markers = checkpoints.routes.flatMap((route, routeIndex) =>
-      route.map((checkpoint) => {
+      route.checkpoints.map((checkpoint) => {
         const marker = new Marker({
           map: instance,
           position: { lat: checkpoint.lat, lng: checkpoint.lon },
@@ -332,9 +332,7 @@ export default function RouteMap({
           )}
         </span>
         <span className="legend-hover" aria-live="polite">
-          {hoveredFips
-            ? describe(forecasts[hovered], countyByFips.get(hoveredFips))
-            : "Hover the map for the forecast when you get there"}
+          {hoveredFips && describe(forecasts[hovered], countyByFips.get(hoveredFips))}
         </span>
       </figcaption>
     </figure>

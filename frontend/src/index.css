@@ -43,7 +43,7 @@ h1 { margin-top: 0; }
      the map, which still scrolls into view. */
   .workspace > .route-result > .county-lists { flex: 0 0 0; min-height: 0; }
   /* Margins don't count when overflowing, so pad the end to keep space below. */
-  .workspace > .route-result > .county-lists > :last-child { padding-bottom: 1.5rem; }
+  .workspace > .route-result > .county-lists .county-list { padding-bottom: 1.5rem; }
   .workspace .route-map-canvas { flex: 1; height: auto; min-height: 260px; }
 }
 /* Stacked: form first, then the result; both tab panels get the same fixed height. */
@@ -102,6 +102,13 @@ a { color: var(--accent); }
 .stepper-step.done .stepper-number {
   border-color: var(--accent); background: var(--accent); color: var(--bg);
 }
+/* Narrow screens: only the current step keeps its label visible (others: number only). */
+@media (max-width: 600px) {
+  .stepper-step:not(.current) .stepper-label {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
 .stepper-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .stepper-panel[hidden] { display: none; }
 .stepper-panel > .trip-form { flex: 1; min-height: 0; }
@@ -146,11 +153,11 @@ a { color: var(--accent); }
 .place-selected { margin: 0.5rem 0 0; color: var(--muted); font-size: 0.9rem; min-height: 1.2em; }
 .notice { padding: 0.75rem 1rem; border-left: 4px solid var(--accent); }
 .route-summary { margin-top: 1.5rem; font-weight: 700; }
-.county-lists { margin: 1.5rem 1rem 0; display: grid; gap: 1.25rem; }
-.county-group-title {
-  display: flex; align-items: center; gap: 0.5rem; margin: 0 0 0.25rem;
-  font-size: 0.9rem; font-weight: 700;
-}
+.county-lists { margin: 1.5rem 1rem 0; }
+/* The route tabs here size to their list (the form's tabs fill a fixed height). */
+.county-lists .tabs, .county-lists .tab-panel { flex: none; height: auto; overflow: visible; }
+.county-lists .tab-list { margin-bottom: 0.75rem; }
+.county-lists .tab { display: inline-flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; }
 .county-list { color: var(--muted); margin: 0; padding-left: 1.5rem; line-height: 1.6; }
 
 .route-map { margin: 1rem 0 1.5rem; }
@@ -162,9 +169,9 @@ a { color: var(--accent); }
 .route-map-canvas { height: clamp(320px, 60vh, 640px); border-radius: 8px; overflow: hidden; }
 .route-map-legend {
   display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1.25rem;
-  margin-top: 0.75rem; font-size: 0.85rem; color: var(--muted);
+  margin: 1rem 1rem 0; font-size: 0.85rem; color: var(--muted);
 }
-.legend-item { display: inline-flex; align-items: center; gap: 0.5rem; }
+.legend-item { display: inline-flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
 .legend-line {
   width: 24px; height: 4px; border-radius: 2px; background: #1d2433;
   box-shadow: 0 0 0 1.5px #fff; /* same white casing as the map line */
@@ -173,6 +180,38 @@ a { color: var(--accent); }
   width: 10px; height: 10px; border-radius: 50%; background: var(--bg);
   box-shadow: 0 0 0 3px var(--muted);
 }
+/* The recommended route and why. */
+.recommendation {
+  padding: 0.75rem 1rem; border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border-left: 4px solid var(--accent);
+}
+.recommendation .place-label { margin-bottom: 0.25rem; }
+.recommendation p { margin: 0; font-size: 0.9rem; }
+.recommendation .legend-line { display: inline-block; vertical-align: middle; margin-right: 0.4rem; }
+
+/* Miles per risk level, one row per route. */
+/* Wider than the pane: scrolls sideways inside its own box, not the page. */
+.miles { overflow-x: auto; max-width: 100%; min-width: 0; padding-bottom: 0.25rem; }
+.miles-table { min-width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+.miles-table th, .miles-table td {
+  padding: 0.35rem 0.5rem; white-space: nowrap;
+  border-bottom: 1px solid color-mix(in srgb, var(--muted) 20%, transparent);
+}
+.miles-table thead th { color: var(--muted); font-weight: 600; }
+.miles-table th[scope="row"] { text-align: left; font-weight: 700; }
+.miles-table thead th:first-child { text-align: left; }
+/* Average risk and ETA, after the miles: set apart by a divider. */
+.miles-table th:nth-last-child(2), .miles-table td:nth-last-child(2) {
+  border-left: 1px solid color-mix(in srgb, var(--muted) 30%, transparent); padding-left: 0.6rem;
+}
+.miles-table th[scope="row"] .legend-line, .miles-table thead .legend-swatch {
+  display: inline-block; vertical-align: middle; margin-right: 0.35rem;
+}
+.miles-table thead .legend-swatch { width: 10px; height: 10px; }
+.miles-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.miles-table .zero { color: var(--muted); opacity: 0.6; }
+
 /* A checkpoint's arrival time on the map: white halo to read over any background. */
 .checkpoint-eta {
   text-shadow: 0 0 2px #fff, 0 0 2px #fff, 0 0 3px #fff, 0 0 4px #fff;
