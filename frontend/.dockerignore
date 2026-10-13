@@ -1,2 +1,4 @@
 node_modules
 dist
+# Django's own pages (served by the backend image, not by nginx)
+django

@@ -11,6 +11,8 @@ from pathlib import Path
 import environ
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
+# Django's own pages (templates, CSS) live with the rest of the frontend.
+FRONTEND_DJANGO_DIR = BASE_DIR / "frontend" / "django"
 
 env = environ.Env(
     DEBUG=(bool, False),
@@ -61,7 +63,7 @@ ASGI_APPLICATION = "config.asgi.application"
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [BASE_DIR / "templates"],
+        "DIRS": [FRONTEND_DJANGO_DIR / "templates"],
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [
@@ -83,7 +85,7 @@ USE_TZ = True
 # ---------------------------------------------------------------- static & media
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"  # `collectstatic` target, served by nginx/whitenoise
-STATICFILES_DIRS = [BASE_DIR / "static"]
+STATICFILES_DIRS = [FRONTEND_DJANGO_DIR / "static"]
 MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"
 STORAGES = {
