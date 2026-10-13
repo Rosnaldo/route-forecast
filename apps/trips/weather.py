@@ -49,6 +49,14 @@ LOCATIONS_PER_REQUEST = 80  # also the size of each streamed batch
 PARALLEL_REQUESTS = 4
 
 
+class GridCenter(NamedTuple):
+    """The middle of one square of the weather grid: the location whose forecast stands
+    for the whole square (and the cache key for it). A (lat, lon) tuple too."""
+
+    lat: float
+    lon: float
+
+
 @dataclass(frozen=True)
 class Forecast:
     wind_mph: float
@@ -120,9 +128,9 @@ class WeatherGrid:
     start: int  # unix time of hour 0 in the series (the start of the current hour)
     weight_lb: float
     step: float  # cell size in degrees (coarser than GRID_STEP on long trips)
-    # Cell centers (lat, lon), ordered by when the truck first reaches them on any
-    # route: forecasts for the start of the trip are fetched first.
-    points: list[tuple[float, float]]
+    # The cells' centers, ordered by when the truck first reaches them on any route:
+    # forecasts for the start of the trip are fetched first.
+    points: list[GridCenter]
     cells: list[Cell]  # each once, however many routes cross it
     route_cells: list[list[RouteCell]]  # per route, in the order given
 
@@ -156,7 +164,7 @@ def weather_grid(
                 for center in {center for center, _, _ in route_pieces}
             }
         )
-    earliest: dict[tuple[float, float], int] = {}
+    earliest: dict[GridCenter, int] = {}
     for route_offsets in offsets:
         for center, offset in route_offsets.items():
             earliest[center] = min(offset, earliest.get(center, offset))
@@ -190,7 +198,7 @@ class FailedBatch(NamedTuple):
 
 
 def forecast_events(
-    centers: list[tuple[float, float]], start: int, weight_lb: float
+    centers: list[GridCenter], start: int, weight_lb: float
 ) -> Iterator[ForecastBatch | FailedBatch]:
     """Forecasts for `centers`, in batches of LOCATIONS_PER_REQUEST as they become
     available: cached ones first (in order), then one Open-Meteo request per batch of
@@ -239,18 +247,18 @@ def _chunks(items: list) -> list[list]:
     ]
 
 
-def grid_center(lat: float, lon: float, step: float) -> tuple[float, float]:
+def grid_center(lat: float, lon: float, step: float) -> GridCenter:
     """Center (lat, lon) of the grid cell of size `step` that contains (lat, lon)."""
     return _center(math.floor(lat / step), math.floor(lon / step), step)
 
 
-def _center(i: int, j: int, step: float) -> tuple[float, float]:
-    return round((i + 0.5) * step, 4), round((j + 0.5) * step, 4)
+def _center(i: int, j: int, step: float) -> GridCenter:
+    return GridCenter(round((i + 0.5) * step, 4), round((j + 0.5) * step, 4))
 
 
 def hourly_forecasts(
-    centers: list[tuple[float, float]], start: int
-) -> dict[tuple[float, float], list[Forecast | None]]:
+    centers: list[GridCenter], start: int
+) -> dict[GridCenter, list[Forecast | None]]:
     """Hourly forecasts from `start` for grid cell centers (cached like the grid's)."""
     centers = sorted(set(centers))
     hourly = _fetch(centers)
@@ -310,7 +318,7 @@ def _candidate_cells(county: County, step: float) -> tuple[np.ndarray, np.ndarra
 
 
 def _offset_s(
-    line: LineString | None, center: tuple[float, float], length_m: float, times: TravelTimes
+    line: LineString | None, center: GridCenter, length_m: float, times: TravelTimes
 ) -> int:
     """Seconds after departure the truck is nearest to `center` (see timing.py)."""
     if line is None or line.length == 0:
@@ -319,7 +327,7 @@ def _offset_s(
     return times.elapsed_s(line.project(Point(lon, lat), normalized=True) * length_m)
 
 
-def _fetch(centers) -> dict[tuple[float, float], dict]:
+def _fetch(centers: list[GridCenter]) -> dict[GridCenter, dict]:
     """Open-Meteo's hourly data for each center; cached centers skip the request."""
     keys = {center: _cache_key(center) for center in centers}
     cached = cache.get_many(keys.values())
@@ -332,7 +340,7 @@ def _fetch(centers) -> dict[tuple[float, float], dict]:
     return hourly
 
 
-def _fetch_batch(batch: list[tuple[float, float]]) -> dict[tuple[float, float], dict]:
+def _fetch_batch(batch: list[GridCenter]) -> dict[GridCenter, dict]:
     """One Open-Meteo request for `batch`; the results are cached."""
     locations = _request(batch)
     if len(locations) != len(batch):
@@ -342,11 +350,11 @@ def _fetch_batch(batch: list[tuple[float, float]]) -> dict[tuple[float, float], 
     return hourly
 
 
-def _cache_key(center: tuple[float, float]) -> str:
+def _cache_key(center: GridCenter) -> str:
     return "weather:{}:{}".format(*center)
 
 
-def _request(batch: list[tuple[float, float]]) -> list[dict]:
+def _request(batch: list[GridCenter]) -> list[dict]:
     params = urllib.parse.urlencode(
         {
             "latitude": ",".join(str(lat) for lat, _ in batch),

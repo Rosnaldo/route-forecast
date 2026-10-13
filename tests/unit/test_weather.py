@@ -142,8 +142,9 @@ def test_forecast_events_come_in_batches_of_80_cached_first():
         list(forecast_events(centers[:50], START, 0))  # caches the first 50
     batches, urlopen = events(centers)
     # Cached points first, in order (50 = one batch); then the other 150 in 80 + 70,
-    # one request each.
-    assert [len(b.points) for b in batches] == [50, 80, 70]
+    # one request each, in whichever order the requests finish.
+    assert len(batches[0].points) == 50
+    assert sorted(len(b.points) for b in batches[1:]) == [70, 80]
     assert [i for i, _ in batches[0].points] == list(range(50))
     assert urlopen.call_count == 2
     fetched = sorted(i for b in batches[1:] for i, _ in b.points)
@@ -228,3 +229,13 @@ def test_grid_pieces_cover_each_county_exactly():
     pieces = _grid_pieces([odd], 0.2)
     assert sum(piece.area for _, _, piece in pieces) == pytest.approx(odd.geometry.area)
     assert len({center for center, _, _ in pieces}) == len(pieces)  # one piece per cell
+
+
+def test_grid_center_is_the_middle_of_the_square_containing_a_position():
+    denver = weather_module.grid_center(39.7392, -104.9903, 0.2)
+    assert isinstance(denver, weather_module.GridCenter)
+    assert (denver.lat, denver.lon) == (39.7, -104.9)
+    assert denver == (39.7, -104.9)  # still a (lat, lon) tuple
+    # 15 km east (Aurora) shares Denver's square; 12 km west (Golden) is the next one.
+    assert weather_module.grid_center(39.7294, -104.8319, 0.2) == denver
+    assert weather_module.grid_center(39.7555, -105.2211, 0.2) == (39.7, -105.3)

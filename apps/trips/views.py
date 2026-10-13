@@ -89,7 +89,7 @@ class WeatherGridSerializer(serializers.Serializer):
         return FORECAST_HOURS
 
     def get_points(self, grid) -> list[dict]:
-        return [{"lat": lat, "lon": lon} for lat, lon in grid.points]
+        return [{"lat": center.lat, "lon": center.lon} for center in grid.points]
 
 
 class RouteCellSerializer(serializers.Serializer):

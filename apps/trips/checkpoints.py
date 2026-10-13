@@ -24,7 +24,7 @@ from apps.core.exceptions import NotFoundError
 from .risk import RiskLevel
 from .routing import Route, haversine_m
 from .timing import BREAK_S, TravelTimes, elapsed_with_breaks
-from .weather import FORECAST_HOURS, Forecast, grid_center, hourly_forecasts
+from .weather import FORECAST_HOURS, Forecast, GridCenter, grid_center, hourly_forecasts
 
 METERS_PER_MILE = 1609.344
 TRIP_CACHE_SECONDS = 60 * 60  # how long a computed trip can get checkpoints
@@ -45,7 +45,7 @@ class Trip:
     # The weather grid, added once built (grid.py): cell size (0 until then), forecast
     # points (cell centers, in streaming order) and unix time of hour 0 of their series.
     step: float = 0.0
-    points: tuple[tuple[float, float], ...] = ()
+    points: tuple[GridCenter, ...] = ()
     start: int = 0
 
 
