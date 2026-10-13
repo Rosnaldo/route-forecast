@@ -19,7 +19,7 @@ export const levelColor = (level) =>
 // point's forecast has streamed in): it passes nearest the
 // point `offsetS` after departure, and departs `departureHour` h from now. Levels
 // already account for the cargo weight sent with the request.
-function forecastAt(weather, point, offsetS, departureHour) {
+export function forecastAt(weather, point, offsetS, departureHour) {
   const eta = weather.now + departureHour * 3600 + offsetS;
   if (!point.levels) return { eta, level: null, loading: true }; // not streamed in yet
   const hour = Math.floor((eta - weather.start) / 3600);

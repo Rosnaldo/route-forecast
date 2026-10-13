@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { loadGoogleMaps } from "../lib/googleMaps.js";
+import { centerValues } from "../lib/heatField.js";
+import { createHeatOverlay } from "../lib/heatOverlay.js";
 import { LOADING_COLOR, NO_FORECAST_COLOR, RISK_LEVELS, levelColor } from "../lib/risk.js";
 import { routeColor, routeLetter, routeName } from "../lib/routes.js";
 
@@ -93,6 +95,10 @@ export default function RouteMap({
   const map = useRef(null); // { maps, map, lines: [{ casing, line, label }] } once created
   const [error, setError] = useState(null);
   const [mapCount, setMapCount] = useState(0); // bumps when a map is created, to fill it
+  // Smooth: values interpolated between centers (heatOverlay.js); off: one flat square
+  // per cell (the Data layer).
+  const [smooth, setSmooth] = useState(true);
+  const overlay = useRef(null);
 
   // Create the map and a line per route.
   useEffect(() => {
@@ -221,7 +227,28 @@ export default function RouteMap({
     };
   }, [checkpoints, mapCount]);
 
-  // The heat map: every cell of the grid (all routes) and every county they cross.
+  // The smooth heat map's overlay, one per map.
+  useEffect(() => {
+    if (!map.current) return;
+    const heat = createHeatOverlay(map.current.maps);
+    heat.setMap(map.current.map);
+    overlay.current = heat;
+    return () => {
+      heat.setMap(null);
+      overlay.current = null;
+    };
+  }, [mapCount]);
+
+  const values = useMemo(
+    () => (weather && smooth ? centerValues(weather, forecasts) : null),
+    [weather, forecasts, smooth],
+  );
+  useEffect(() => {
+    overlay.current?.setField(values && weather, values);
+  }, [values, weather, mapCount]);
+
+  // The square heat map (when not smooth): every cell of the grid (all routes), and
+  // every county they cross.
   useEffect(() => {
     if (!map.current) return;
     const { map: instance } = map.current;
@@ -230,7 +257,7 @@ export default function RouteMap({
     instance.data.addGeoJson({
       type: "FeatureCollection",
       features: [
-        ...weather.cells.map(({ geometry }, index) => ({
+        ...(smooth ? [] : weather.cells).map(({ geometry }, index) => ({
           type: "Feature",
           geometry,
           properties: { kind: "cell", index },
@@ -245,7 +272,7 @@ export default function RouteMap({
       ],
     });
     // The cells' shapes only: streamed forecasts recolor them (below), never redraw.
-  }, [weather?.cells, countyByFips, mapCount]);
+  }, [weather?.cells, countyByFips, mapCount, smooth]);
 
   // Color the cells for the departure time; also once they are added.
   useEffect(() => {
@@ -317,6 +344,10 @@ export default function RouteMap({
             </span>
           )}
         </span>
+        <label className="legend-item">
+          <input type="checkbox" checked={smooth} onChange={(e) => setSmooth(e.target.checked)} />
+          Smooth heat map
+        </label>
       </figcaption>
     </figure>
   );

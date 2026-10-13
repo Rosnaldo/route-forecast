@@ -46,6 +46,7 @@ class WeatherGridSerializer(serializers.Serializer):
     start = serializers.IntegerField()
     hours = serializers.SerializerMethodField()
     weight_lb = serializers.FloatField()
+    step = serializers.FloatField()  # cell size in degrees; centers at (i + 0.5) * step
     points = serializers.SerializerMethodField()  # [{lat, lon}], in streaming order
     cells = WeatherCellSerializer(many=True)
 
