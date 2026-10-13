@@ -14,7 +14,7 @@ route.
 - Weather factors: wind (mph); rain (in/hr); snow (in/hr)
 - 30-minute stop after every 8 hours of driving.
 - velocity 100 km/h used as fallback
-
+- the heatmap forecast area are represented by grids of 20km squares
 
 ```
 average = Σ (level × piece length) ÷ Σ (piece length)      over pieces that have a forecast
@@ -23,7 +23,7 @@ average = Σ (level × piece length) ÷ Σ (piece length)      over pieces that 
 ## External APIs
 
 - **Google Routes API** (`routes.googleapis.com/directions/v2:computeRoutes`) — returns up to three driving route options between origin and destination (backend, [services/routing.py](apps/trips/services/routing.py)).
-- **Google Maps JavaScript API** — draws the routes, counties and weather grid on the map (frontend, [googleMaps.js](frontend/src/lib/googleMaps.js)).
+- **Google Maps JavaScript API** — render the map (frontend, [googleMaps.js](frontend/src/lib/googleMaps.js)).
 - **Google Places API** (Maps JS `places` library) — autocompletes the origin and destination inputs (frontend, [PlaceInput.jsx](frontend/src/components/PlaceInput.jsx)).
 - **Open-Meteo Forecast API** (`api.open-meteo.com/v1/forecast`) — free hourly wind, rain and snow forecasts for each grid point (backend, [services/weather.py](apps/trips/services/weather.py)).
 
