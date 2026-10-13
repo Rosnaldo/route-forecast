@@ -19,7 +19,7 @@ from apps.trips.services.counties import counties_along
 from apps.trips.services.routing import decode_polyline
 from apps.trips.services.trip_store import load_trip, save_trip
 
-URL = "/api/v1/trips/route/"
+URL = "/backend/trips/route/"
 DENVER = {"lat": 39.7392, "lon": -104.9903}
 VAIL = {"lat": 39.6403, "lon": -106.3742}
 
@@ -135,7 +135,7 @@ def test_point_needs_coordinates_or_address(api_client, point):
 
 
 def test_large_responses_are_gzipped(api_client):
-    response = api_client.get("/api/v1/trips/examples/", HTTP_ACCEPT_ENCODING="gzip")
+    response = api_client.get("/backend/trips/examples/", HTTP_ACCEPT_ENCODING="gzip")
     assert response.status_code == 200
     assert response["Content-Encoding"] == "gzip"
 
@@ -160,7 +160,7 @@ def test_checkpoints_and_recommendation_share_the_risk_calculation(api_client):
 
 
 def test_example_routes(api_client):
-    response = api_client.get("/api/v1/trips/examples/")
+    response = api_client.get("/backend/trips/examples/")
     assert response.status_code == 200
     rows = response.json()
     assert len(rows) == 11
@@ -279,7 +279,7 @@ def test_county_outline_is_simplified_geojson():
     assert len(str(simplified)) < len(str(denver.geometry.__geo_interface__))
 
 
-CHECKPOINTS_URL = "/api/v1/trips/checkpoints/"
+CHECKPOINTS_URL = "/backend/trips/checkpoints/"
 UNKNOWN_TRIP = "0" * 32  # well-formed, never saved
 
 
@@ -359,7 +359,7 @@ def test_checkpoints_validation(api_client, overrides):
     assert response.json().keys() == {next(iter(overrides))}
 
 
-RECOMMENDATION_URL = "/api/v1/trips/recommendation/"
+RECOMMENDATION_URL = "/backend/trips/recommendation/"
 
 
 def test_recommendation(api_client):
@@ -454,7 +454,7 @@ def stream(api_client, trip, **headers):
     ):
         trip_id = save_trip(trip)
         response = api_client.get(
-            f"/api/v1/trips/{trip_id}/weather/", HTTP_ACCEPT="text/event-stream", **headers
+            f"/backend/trips/{trip_id}/weather/", HTTP_ACCEPT="text/event-stream", **headers
         )
         return trip_id, response, read_events(response)
 
@@ -495,7 +495,7 @@ def test_weather_stream_is_gzipped_event_by_event(api_client):
         mock.patch("apps.trips.services.trips.counties_along", return_value=[SQUARE]),
     ):
         response = api_client.get(
-            f"/api/v1/trips/{trip_id}/weather/",
+            f"/backend/trips/{trip_id}/weather/",
             HTTP_ACCEPT="text/event-stream",
             HTTP_ACCEPT_ENCODING="gzip",
         )
@@ -521,12 +521,12 @@ def test_checkpoints_build_the_grid_if_the_stream_did_not(api_client):
 
 
 def test_weather_stream_for_an_unknown_trip(api_client):
-    response = api_client.get(f"/api/v1/trips/{UNKNOWN_TRIP}/weather/")
+    response = api_client.get(f"/backend/trips/{UNKNOWN_TRIP}/weather/")
     assert response.status_code == 404
     assert response.json()["code"] == "not_found"
 
 
 def test_weather_stream_refuses_a_malformed_trip_id(api_client):
-    response = api_client.get("/api/v1/trips/missing/weather/")
+    response = api_client.get("/backend/trips/missing/weather/")
     assert response.status_code == 400
     assert response.json()["code"] == "invalid"

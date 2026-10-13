@@ -32,7 +32,7 @@ class WeatherStreamView(View):
     A plain Django view: browsers' EventSource asks for text/event-stream, which DRF's
     content negotiation would refuse."""
 
-    def get(self, request, version: str, trip_id: str):
+    def get(self, request, trip_id: str):
         try:
             validate_trip_id(trip_id)
         except ValidationError as exc:

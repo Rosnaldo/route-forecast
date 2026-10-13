@@ -20,7 +20,7 @@ export default function useWeatherStream(tripId) {
     setState("loading");
     setFailed(0);
     setDetail(null);
-    const source = new EventSource(`/api/v1/trips/${tripId}/weather/`);
+    const source = new EventSource(`/backend/trips/${tripId}/weather/`);
 
     source.addEventListener("grid", (event) => setGrid(JSON.parse(event.data)));
     source.addEventListener("batch", (event) => {

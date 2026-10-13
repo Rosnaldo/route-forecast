@@ -7,7 +7,7 @@ export default function ExampleRoutes({ selectedId, onSelect }) {
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    fetch("/api/v1/trips/examples/")
+    fetch("/backend/trips/examples/")
       .then((response) => {
         if (!response.ok) throw new Error("Could not load example routes");
         return response.json();

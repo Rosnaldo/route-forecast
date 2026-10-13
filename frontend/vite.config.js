@@ -28,7 +28,7 @@ export default defineConfig(({ mode }) => {
       allowedHosts: domain ? [domain, `www.${domain}`] : [],
       // Same origin in development: no CORS needed.
       proxy: {
-        "/api": backend,
+        "/backend": backend,
         "/health": backend,
       },
     },

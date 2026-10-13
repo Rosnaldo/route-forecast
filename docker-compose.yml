@@ -44,7 +44,7 @@ services:
       - /app/node_modules  # keep the container's node_modules, not the host's
     depends_on: [backend]
 
-  # HTTPS in front of both, as in production: /api/, /static/, /health/ go to Django,
+  # HTTPS in front of both, as in production: /backend/, /static/, /health/ go to Django,
   # the rest to Vite (hot reload included). ${BASE_DOMAIN} in the template comes from
   # nginx/.env.dev.
   nginx:

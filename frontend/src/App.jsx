@@ -165,7 +165,7 @@ export default function App() {
 
     const controller = new AbortController();
     setLoading(true);
-    fetch("/api/v1/trips/route/", {
+    fetch("/backend/trips/route/", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -207,7 +207,7 @@ export default function App() {
   // then the recommended route for that departure.
   const submitDistanceDeparture = ({ distanceMi, departure }) => {
     const post = (path, body) =>
-      fetch(`/api/v1/trips/${path}/`, {
+      fetch(`/backend/trips/${path}/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

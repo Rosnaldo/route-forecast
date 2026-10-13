@@ -21,7 +21,7 @@ class RouteView(APIView):
 
     serializer_class = RouteRequestSerializer
 
-    def post(self, request: Request, version: str) -> Response:
+    def post(self, request: Request) -> Response:
         params = RouteRequestSerializer(data=request.data)
         params.is_valid(raise_exception=True)
         departure, arrival, weight_lb = (
@@ -39,7 +39,7 @@ class CheckpointsView(APIView):
 
     serializer_class = CheckpointsRequestSerializer
 
-    def post(self, request: Request, version: str) -> Response:
+    def post(self, request: Request) -> Response:
         params = CheckpointsRequestSerializer(data=request.data)
         params.is_valid(raise_exception=True)
         trip_id, distance_mi, departure = (
@@ -56,7 +56,7 @@ class RecommendationView(APIView):
 
     serializer_class = TripDepartureSerializer
 
-    def post(self, request: Request, version: str) -> Response:
+    def post(self, request: Request) -> Response:
         params = TripDepartureSerializer(data=request.data)
         params.is_valid(raise_exception=True)
         trip_id = params.validated_data["trip_id"]
@@ -73,5 +73,5 @@ class RecommendationView(APIView):
 class ExampleRoutesView(APIView):
     """Sample trips from example_routes.csv, for trying the route endpoint."""
 
-    def get(self, request: Request, version: str) -> Response:
+    def get(self, request: Request) -> Response:
         return Response(trips.example_routes())

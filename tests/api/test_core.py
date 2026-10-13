@@ -23,7 +23,7 @@ def test_home_page_renders_template(client):
 
 
 def test_openapi_schema(client):
-    response = client.get("/api/schema/")
+    response = client.get("/backend/schema/")
     assert response.status_code == 200
     assert response.content.startswith(b"openapi: 3")
 
@@ -31,5 +31,5 @@ def test_openapi_schema(client):
 def test_api_is_throttled_per_client(api_client):
     # Rates are read into the class at import time, so patch the class attribute.
     with mock.patch.object(AnonRateThrottle, "THROTTLE_RATES", {"anon": "2/minute"}):
-        codes = [api_client.get("/api/schema/").status_code for _ in range(3)]
+        codes = [api_client.get("/backend/schema/").status_code for _ in range(3)]
     assert codes == [200, 200, 429]

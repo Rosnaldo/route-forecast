@@ -1,7 +1,7 @@
 # Production stack:  docker compose -f docker-compose.prod.yml up -d --build
 #
 # Only nginx is published: nginx-http (80) answers Let's Encrypt's challenge and
-# redirects to HTTPS; nginx-https (443) terminates TLS and proxies /api/, /static/ and
+# redirects to HTTPS; nginx-https (443) terminates TLS and proxies /backend/, /static/ and
 # /health/ to Django. Redis and the backend are reachable only inside the stack.
 # The React app is not part of this stack: it is deployed to S3 behind CloudFront
 # (deploy_web_s3.sh), and CloudFront forwards the API paths here.

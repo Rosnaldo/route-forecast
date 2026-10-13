@@ -1,4 +1,4 @@
-"""URL routes of the trip API, mounted under /api/<version>/ (config/urls.py)."""
+"""URL routes of the trip API, mounted under /backend/ (config/urls.py)."""
 
 from django.urls import path
 

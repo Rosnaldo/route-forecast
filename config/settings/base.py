@@ -120,9 +120,6 @@ REST_FRAMEWORK = {
         "rest_framework.filters.SearchFilter",
         "rest_framework.filters.OrderingFilter",
     ],
-    "DEFAULT_VERSIONING_CLASS": "rest_framework.versioning.URLPathVersioning",
-    "DEFAULT_VERSION": "v1",
-    "ALLOWED_VERSIONS": ["v1", "v2"],
     # Per-client-IP rate limit (every caller is anonymous).
     "DEFAULT_THROTTLE_CLASSES": ["rest_framework.throttling.AnonRateThrottle"],
     "DEFAULT_THROTTLE_RATES": {"anon": env("API_RATE_LIMIT", default="1000/hour")},
