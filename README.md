@@ -12,19 +12,35 @@ route.
 - Region: contiguous United States
 - Forecast window: 48 hours
 - Weather factors: wind (mph); rain (in/hr); snow (in/hr)
-- 30-minute stop after every 8 hours of driving.
-- velocity 100 km/h used as fallback
+- 30-minute mandatory stop after every 8 hours of driving.
+- calculate expeted arrival:
+  - for each step of the route it will be considered the average velocity (google routes API)
+  - velocity 100 km/h used as fallback
 - the heatmap forecast area are represented by grids of 20km squares
 
+
+
+## Average Formula
+
+Each route step is weighted by its risk level:
+
+| Risk level | Weight |
+| ---------- | ------ |
+| Low        | 0      |
+| Moderate   | 1      |
+| High       | 2      |
+| Severe     | 3      |
+| No Travel  | 4      |
+
 ```
-average = Σ (level × piece length) ÷ Σ (piece length)      over pieces that have a forecast
+average = Σ (level × step length) ÷ Σ (step length)      over steps that have a forecast
 ```
 
 ## External APIs
 
-- **Google Routes API** (`routes.googleapis.com/directions/v2:computeRoutes`) — returns up to three driving route options between origin and destination (backend, [services/routing.py](apps/trips/services/routing.py)).
 - **Google Maps JavaScript API** — render the map (frontend, [googleMaps.js](frontend/src/lib/googleMaps.js)).
 - **Google Places API** (Maps JS `places` library) — autocompletes the origin and destination inputs (frontend, [PlaceInput.jsx](frontend/src/components/PlaceInput.jsx)).
+- **Google Routes API** (`routes.googleapis.com/directions/v2:computeRoutes`) — returns up to three driving route options between origin and destination (backend, [services/routing.py](apps/trips/services/routing.py)).
 - **Open-Meteo Forecast API** (`api.open-meteo.com/v1/forecast`) — free hourly wind, rain and snow forecasts for each grid point (backend, [services/weather.py](apps/trips/services/weather.py)).
 
 ## County boundaries
@@ -40,3 +56,10 @@ copy of every US county's shape**.
 **What is the spatial index?** A fast check that finds the few counties near
 the route, and only those get the exact geometry check. Without it, every
 request would test the route against all 3,235 county polygons.
+
+
+## Cache
+
+- Trip (routes, points/steps, grid)
+- Hourly forecast per grid cell center
+- Computed route risks
