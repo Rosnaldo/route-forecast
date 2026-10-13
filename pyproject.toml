@@ -1,7 +1,7 @@
 [project]
 name = "shop"
 version = "0.1.0"
-description = "Django API base: DRF, Redis, Celery, Docker, AWS."
+description = "Django API base: DRF, Redis, Celery, Docker."
 requires-python = ">=3.12"
 dependencies = [
     "django>=5.2,<6.1",
@@ -15,8 +15,6 @@ dependencies = [
     "uvicorn-worker>=0.3",
     "gunicorn>=23.0",
     "whitenoise>=6.9",
-    "boto3>=1.37",
-    "django-storages[s3]>=1.14",
     "shapely>=2.0",
     "pyshp>=2.3",
 ]

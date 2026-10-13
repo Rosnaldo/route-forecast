@@ -3,7 +3,7 @@
 This base has no business domain yet. These are the conventions for adding one.
 They are applied with judgement: full layering where the rules are rich, a plain
 view where it is just glue. There is no database: state lives in Redis (cache)
-and S3 (files).
+and the local filesystem (files).
 
 ```
      HTTP / Celery / management commands                 <- driving adapters
@@ -18,7 +18,7 @@ and S3 (files).
                         events, and PORTS (typing.Protocol) for what it needs
                           ▲
                           │ implements ports
-          adapters      clients for external APIs (weather, maps), Redis/S3 storage
+          adapters      clients for external APIs (weather, maps), Redis storage
 ```
 
 ## Building blocks already in `apps/core`
