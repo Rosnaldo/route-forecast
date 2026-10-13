@@ -24,7 +24,7 @@ ENV GOOGLE_MAPS_API_KEY=$GOOGLE_MAPS_API_KEY
 RUN npm run build
 
 # ---------- runtime: nginx with the bundle ----------
-# No config here: docker-compose.prod.yml runs it as nginx-https with
-# nginx/prod/https/nginx.conf.
+# Not used by docker-compose.prod.yml: production serves the bundle from S3 behind
+# CloudFront (deploy_web_s3.sh). Kept to serve the app from a container if needed.
 FROM nginx:1.27-alpine AS runtime
 COPY --from=build /app/dist /usr/share/nginx/html
