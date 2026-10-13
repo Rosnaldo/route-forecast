@@ -1,11 +1,12 @@
 import pytest
 
-from apps.trips.routing import Point, Route, Step
-from apps.trips.timing import BREAK_AFTER_S, BREAK_S, TravelTimes, elapsed_with_breaks
+from apps.trips.business.route import length_m
+from apps.trips.business.timing import BREAK_AFTER_S, BREAK_S, TravelTimes, elapsed_with_breaks
+from apps.trips.domain.route import Point, Route, Step
 
 # Straight north along a meridian: ~111.2 km per degree.
 POINTS = [Point(0.0, 0.0), Point(1.0, 0.0)]
-LENGTH = Route(0, 0, POINTS).length_m()
+LENGTH = length_m(Route(0, 0, POINTS))
 
 
 def test_without_steps_the_whole_route_runs_at_the_fallback_speed():
@@ -49,5 +50,5 @@ def test_breaks_add_to_travel_times_along_a_long_route():
     # 1,000 km at 100 km/h: 10 h driving, one break -> 10 h 30 min.
     route = Route(0, 0, [Point(0.0, 0.0), Point(8.993, 0.0)])  # ~1,000 km north
     times = TravelTimes(route)
-    assert times.elapsed_s(route.length_m()) == pytest.approx(10.5 * 3600, abs=60)
-    assert times.elapsed_s(route.length_m() * 0.7) == pytest.approx(7 * 3600, abs=60)
+    assert times.elapsed_s(length_m(route)) == pytest.approx(10.5 * 3600, abs=60)
+    assert times.elapsed_s(length_m(route) * 0.7) == pytest.approx(7 * 3600, abs=60)

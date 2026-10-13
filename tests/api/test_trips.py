@@ -8,11 +8,16 @@ from unittest import mock
 import pytest
 from shapely import box
 
-from apps.trips import checkpoints as checkpoints_module
-from apps.trips.checkpoints import Trip, load_trip, save_trip
-from apps.trips.counties import County, counties_along
-from apps.trips.routing import Point, Route, Step, decode_polyline
-from apps.trips.weather import Forecast
+from apps.trips.business import trip as trip_module
+from apps.trips.business.geometry import outline
+from apps.trips.business.route import display_points
+from apps.trips.domain.county import County
+from apps.trips.domain.route import Point, Route, Step
+from apps.trips.domain.trip import Trip
+from apps.trips.domain.weather import Forecast
+from apps.trips.services.counties import counties_along
+from apps.trips.services.routing import decode_polyline
+from apps.trips.services.trip_store import load_trip, save_trip
 
 URL = "/api/v1/trips/route/"
 DENVER = {"lat": 39.7392, "lon": -104.9903}
@@ -31,7 +36,7 @@ def _routes_key(settings):
 def fake_urlopen(payload):
     """Every Routes API call (the main one and any fallbacks) gets `payload`."""
     return mock.patch(
-        "apps.trips.routing.urllib.request.urlopen",
+        "apps.trips.services.routing.urllib.request.urlopen",
         side_effect=lambda *args, **kwargs: io.BytesIO(json.dumps(payload).encode()),
     )
 
@@ -69,7 +74,7 @@ def test_route(api_client):
     }
     with (
         fake_urlopen(payload) as urlopen,
-        mock.patch("apps.trips.grid.counties_along") as counties,
+        mock.patch("apps.trips.services.trips.counties_along") as counties,
     ):
         response = api_client.post(URL, {"departure": DENVER, "arrival": VAIL, "weight_lb": 20_000})
 
@@ -98,8 +103,8 @@ def test_route(api_client):
 
 def test_display_points_are_simplified():
     straight = Route(1, 1, [Point(39.0, -105.0 + i * 0.001) for i in range(1000)])
-    assert straight.display_points() == [(39.0, -105.0), (39.0, -104.001)]
-    assert Route(1, 1, DECODED[:2]).display_points() == DECODED[:2]
+    assert display_points(straight) == [(39.0, -105.0), (39.0, -104.001)]
+    assert display_points(Route(1, 1, DECODED[:2])) == DECODED[:2]
 
 
 def test_route_from_addresses(api_client):
@@ -143,12 +148,10 @@ def test_checkpoints_and_recommendation_share_the_risk_calculation(api_client):
     body = checkpoints_body(trip_id)
     with (
         mock.patch(
-            "apps.trips.checkpoints.hourly_forecasts",
+            "apps.trips.services.trips.hourly_forecasts",
             side_effect=lambda centers, start: dict.fromkeys(centers, hours),
         ),
-        mock.patch(
-            "apps.trips.checkpoints.route_risks", wraps=checkpoints_module.route_risks
-        ) as risks,
+        mock.patch("apps.trips.services.trips.route_risks", wraps=trip_module.route_risks) as risks,
     ):
         assert api_client.post(CHECKPOINTS_URL, body, format="json").status_code == 200
         del body["distance_mi"]
@@ -179,7 +182,7 @@ def test_no_route_found(api_client):
 
 def test_google_error_is_bad_gateway(api_client):
     error = urllib.error.HTTPError(URL, 403, "Forbidden", {}, None)
-    with mock.patch("apps.trips.routing.urllib.request.urlopen", side_effect=error):
+    with mock.patch("apps.trips.services.routing.urllib.request.urlopen", side_effect=error):
         response = api_client.post(URL, {"departure": DENVER, "arrival": VAIL, "weight_lb": 20_000})
     assert response.status_code == 502
     assert response.json() == {"code": "upstream_error", "detail": mock.ANY, "status": 403}
@@ -191,7 +194,7 @@ def test_missing_key_is_bad_gateway(api_client, settings):
     assert response.status_code == 502
 
 
-@pytest.mark.parametrize("weight", [None, 999, 100_001, "heavy"])
+@pytest.mark.parametrize("weight", [None, 999, 100_001, "heavy", True, "NaN", "Infinity"])
 def test_weight_is_required_and_in_range(api_client, weight):
     body = {"departure": DENVER, "arrival": VAIL}
     if weight is not None:
@@ -201,11 +204,42 @@ def test_weight_is_required_and_in_range(api_client, weight):
     assert "weight_lb" in response.json()
 
 
-def test_invalid_coordinates(api_client):
-    response = api_client.post(
-        URL, {"departure": {"lat": 200, "lon": 0}, "arrival": VAIL, "weight_lb": 20_000}
-    )
+@pytest.mark.parametrize(
+    "point",
+    [
+        {"lat": 200, "lon": 0},
+        {"lat": 0, "lon": -181},
+        {"lat": True, "lon": 0},
+        {"lat": "NaN", "lon": 0},
+        {"lat": 39.7, "lng": -105.0},  # typo: an unknown field
+        {"address": "D"},
+        {"address": "Denver\nCO"},
+        {"address": "x" * 201},
+        "Denver, CO",
+    ],
+)
+def test_invalid_points(api_client, point):
+    response = api_client.post(URL, {"departure": point, "arrival": VAIL, "weight_lb": 20_000})
     assert response.status_code == 400
+    assert response.json().keys() == {"departure"}
+
+
+@pytest.mark.parametrize(
+    ("departure", "arrival"),
+    [(DENVER, DENVER), ({"address": "Denver, CO"}, {"address": " denver,  co "})],
+)
+def test_departure_and_arrival_must_differ(api_client, departure, arrival):
+    body = {"departure": departure, "arrival": arrival, "weight_lb": 20_000}
+    response = api_client.post(URL, body, format="json")
+    assert response.status_code == 400
+    assert response.json() == {"arrival": ["Arrival must differ from departure."]}
+
+
+def test_route_refuses_unknown_fields(api_client):
+    body = {"departure": DENVER, "arrival": VAIL, "weight_lb": 20_000, "weight": 1}
+    response = api_client.post(URL, body, format="json")
+    assert response.status_code == 400
+    assert response.json() == {"weight": ["Unknown field."]}
 
 
 # Hand-made path along I-70 from Denver to Vail, (lat, lon).
@@ -240,12 +274,13 @@ def test_counties_along_empty_and_offshore():
 
 def test_county_outline_is_simplified_geojson():
     (denver,) = counties_along([(39.7392, -104.9903)])
-    outline = denver.outline()
-    assert outline["type"] in ("Polygon", "MultiPolygon")
-    assert len(str(outline)) < len(str(denver.geometry.__geo_interface__))
+    simplified = outline(denver.geometry)
+    assert simplified["type"] in ("Polygon", "MultiPolygon")
+    assert len(str(simplified)) < len(str(denver.geometry.__geo_interface__))
 
 
 CHECKPOINTS_URL = "/api/v1/trips/checkpoints/"
+UNKNOWN_TRIP = "0" * 32  # well-formed, never saved
 
 
 def checkpoints_body(trip_id, **overrides):
@@ -259,7 +294,7 @@ def test_checkpoints(api_client):
     )
     hours = [Forecast(12, 0.05, 0)] * 49
     with mock.patch(
-        "apps.trips.checkpoints.hourly_forecasts",
+        "apps.trips.services.trips.hourly_forecasts",
         side_effect=lambda centers, start: dict.fromkeys(centers, hours),
     ):
         response = api_client.post(CHECKPOINTS_URL, checkpoints_body(trip_id), format="json")
@@ -299,7 +334,7 @@ def test_checkpoints(api_client):
 
 
 def test_checkpoints_for_an_unknown_trip(api_client):
-    response = api_client.post(CHECKPOINTS_URL, checkpoints_body("missing"), format="json")
+    response = api_client.post(CHECKPOINTS_URL, checkpoints_body(UNKNOWN_TRIP), format="json")
     assert response.status_code == 404
 
 
@@ -309,11 +344,16 @@ def test_checkpoints_for_an_unknown_trip(api_client):
         {"distance_mi": 30},
         {"departure": "2020-01-01T00:00:00Z"},
         {"departure": (datetime.now(UTC) + timedelta(hours=49)).isoformat()},
+        {"distance_mi": True},
         {"trip_id": ""},
+        {"trip_id": "x"},
+        {"trip_id": "A" * 32},  # ids are lowercase
+        {"trip_id": "g" * 32},
+        {"trip_id": UNKNOWN_TRIP + "0"},
     ],
 )
 def test_checkpoints_validation(api_client, overrides):
-    body = checkpoints_body("x") | overrides
+    body = checkpoints_body(UNKNOWN_TRIP) | overrides
     response = api_client.post(CHECKPOINTS_URL, body, format="json")
     assert response.status_code == 400
     assert response.json().keys() == {next(iter(overrides))}
@@ -330,7 +370,7 @@ def test_recommendation(api_client):
     trip_id = save_trip(Trip([long, short], 20_000, 0.2))
     hours = [Forecast(40, 0, 0)] * 49  # 40 mph: High everywhere
     with mock.patch(
-        "apps.trips.checkpoints.hourly_forecasts",
+        "apps.trips.services.trips.hourly_forecasts",
         side_effect=lambda centers, start: dict.fromkeys(centers, hours),
     ):
         body = checkpoints_body(trip_id)
@@ -352,17 +392,26 @@ def test_recommendation(api_client):
 
 
 def test_recommendation_for_an_unknown_trip(api_client):
-    body = checkpoints_body("missing")
+    body = checkpoints_body(UNKNOWN_TRIP)
     del body["distance_mi"]
     assert api_client.post(RECOMMENDATION_URL, body, format="json").status_code == 404
 
 
 def test_recommendation_validation(api_client):
     response = api_client.post(
-        RECOMMENDATION_URL, {"trip_id": "x", "departure": "2020-01-01T00:00:00Z"}, format="json"
+        RECOMMENDATION_URL,
+        {"trip_id": UNKNOWN_TRIP, "departure": "2020-01-01T00:00:00Z"},
+        format="json",
     )
     assert response.status_code == 400
     assert response.json().keys() == {"departure"}
+
+
+def test_requests_refuse_unknown_fields(api_client):
+    body = checkpoints_body(UNKNOWN_TRIP, gap=10)
+    response = api_client.post(CHECKPOINTS_URL, body, format="json")
+    assert response.status_code == 400
+    assert response.json() == {"gap": ["Unknown field."]}
 
 
 def read_events(response) -> list[tuple[str, dict]]:
@@ -391,24 +440,27 @@ def fake_open_meteo():
         count = url.count("%2C", 0, url.index("longitude")) + 1  # latitudes in the request
         return io.BytesIO(json.dumps([{"hourly": HOURLY}] * count).encode())
 
-    return mock.patch("apps.trips.weather.urllib.request.urlopen", side_effect=urlopen)
+    return mock.patch("apps.trips.services.weather.urllib.request.urlopen", side_effect=urlopen)
 
 
-def stream(api_client, trip_id, **headers):
+def stream(api_client, trip, **headers):
+    """Saves the trip and streams its weather; returns (trip_id, response, events)."""
+    # The time patch reaches time.time everywhere, the cache's expiry checks included,
+    # so the trip is saved inside it too: saved before, it would already be expired.
     with (
         fake_open_meteo(),
-        mock.patch("apps.trips.grid.counties_along", return_value=[SQUARE]),
-        mock.patch("apps.trips.weather.time.time", return_value=1_800_000_000),
+        mock.patch("apps.trips.services.trips.counties_along", return_value=[SQUARE]),
+        mock.patch("apps.trips.business.weather.time.time", return_value=1_800_000_000),
     ):
+        trip_id = save_trip(trip)
         response = api_client.get(
             f"/api/v1/trips/{trip_id}/weather/", HTTP_ACCEPT="text/event-stream", **headers
         )
-        return response, read_events(response)
+        return trip_id, response, read_events(response)
 
 
 def test_weather_stream_sends_the_grid_then_the_forecasts(api_client):
-    trip_id = save_trip(Trip([ACROSS], 45_000))
-    response, events = stream(api_client, trip_id)
+    trip_id, response, events = stream(api_client, Trip([ACROSS], 45_000))
     assert response.status_code == 200
     assert response["Content-Type"] == "text/event-stream"
     assert response["X-Accel-Buffering"] == "no"
@@ -440,7 +492,7 @@ def test_weather_stream_is_gzipped_event_by_event(api_client):
     trip_id = save_trip(Trip([ACROSS], 20_000))
     with (
         fake_open_meteo(),
-        mock.patch("apps.trips.grid.counties_along", return_value=[SQUARE]),
+        mock.patch("apps.trips.services.trips.counties_along", return_value=[SQUARE]),
     ):
         response = api_client.get(
             f"/api/v1/trips/{trip_id}/weather/",
@@ -459,13 +511,22 @@ def test_weather_stream_is_gzipped_event_by_event(api_client):
 def test_checkpoints_build_the_grid_if_the_stream_did_not(api_client):
     trip_id = save_trip(Trip([ACROSS], 20_000))
     body = checkpoints_body(trip_id)
-    with fake_open_meteo(), mock.patch("apps.trips.grid.counties_along", return_value=[SQUARE]):
+    with (
+        fake_open_meteo(),
+        mock.patch("apps.trips.services.trips.counties_along", return_value=[SQUARE]),
+    ):
         response = api_client.post(CHECKPOINTS_URL, body, format="json")
     assert response.status_code == 200
     assert load_trip(trip_id).step == 0.2
 
 
 def test_weather_stream_for_an_unknown_trip(api_client):
-    response = api_client.get("/api/v1/trips/missing/weather/")
+    response = api_client.get(f"/api/v1/trips/{UNKNOWN_TRIP}/weather/")
     assert response.status_code == 404
     assert response.json()["code"] == "not_found"
+
+
+def test_weather_stream_refuses_a_malformed_trip_id(api_client):
+    response = api_client.get("/api/v1/trips/missing/weather/")
+    assert response.status_code == 400
+    assert response.json()["code"] == "invalid"

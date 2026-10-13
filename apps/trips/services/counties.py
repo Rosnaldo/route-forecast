@@ -8,36 +8,17 @@ runs exact geometry checks on counties whose bounding box touches the route.
 """
 
 import threading
-from dataclasses import dataclass, field
 from functools import cache
 
 import shapefile
 import shapely
 from django.conf import settings
 from shapely import LineString, Point, STRtree
-from shapely.geometry import mapping, shape
-from shapely.geometry.base import BaseGeometry
+from shapely.geometry import shape
+
+from ..domain.county import County
 
 COUNTIES_FILE = settings.BASE_DIR / "data" / "cb_2024_us_county_500k.zip"
-# Outline detail sent to the map: ~500 m simplification, ~10 m coordinate grid.
-DISPLAY_TOLERANCE = 0.005
-DISPLAY_GRID = 0.0001
-
-
-@dataclass(frozen=True)
-class County:
-    fips: str  # 5-digit state+county code, e.g. "08031"
-    name: str
-    state: str  # USPS abbreviation, e.g. "CO"
-    geometry: BaseGeometry | None = field(default=None, compare=False, repr=False)
-
-    def outline(self) -> dict | None:
-        """Simplified GeoJSON geometry, small enough to draw on a map."""
-        if self.geometry is None:
-            return None
-        simplified = self.geometry.simplify(DISPLAY_TOLERANCE)
-        return mapping(shapely.set_precision(simplified, DISPLAY_GRID))
-
 
 _index_lock = threading.Lock()
 

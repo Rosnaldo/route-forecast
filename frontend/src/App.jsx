@@ -43,7 +43,7 @@ function RouteSummary({ trip, data, loading, error }) {
 
 const asPoint = ({ lat, lon }) => ({ lat, lon });
 
-// Cargo weight; heavier loads raise the wind risk (see apps/trips/risk.py).
+// Cargo weight; heavier loads raise the wind risk (see apps/trips/business/risk.py).
 function WeightInput({ weightLb, onChange }) {
   return (
     <div className="weight-field">

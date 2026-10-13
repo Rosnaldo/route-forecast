@@ -1,12 +1,9 @@
+"""URL routes of the trip API, mounted under /api/<version>/ (config/urls.py)."""
+
 from django.urls import path
 
-from .views import (
-    CheckpointsView,
-    ExampleRoutesView,
-    RecommendationView,
-    RouteView,
-    WeatherStreamView,
-)
+from .controllers.trips import CheckpointsView, ExampleRoutesView, RecommendationView, RouteView
+from .controllers.weather import WeatherStreamView
 
 urlpatterns = [
     path("trips/route/", RouteView.as_view(), name="trip-route"),

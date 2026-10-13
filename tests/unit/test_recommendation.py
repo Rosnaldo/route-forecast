@@ -1,7 +1,7 @@
 import pytest
 
-from apps.trips.checkpoints import RouteRisk
-from apps.trips.recommendation import recommend
+from apps.trips.business.recommendation import recommend
+from apps.trips.domain.trip import RouteRisk
 
 
 def risk(severe=0.0, high=0.0, average=0.5, travel_min=300, no_travel=0.0, low=100.0):
@@ -63,3 +63,52 @@ def test_no_forecast_average_ranks_last_and_full_ties_keep_googles_order():
     assert ranking([risk(average=None), risk(average=3.9)]) == ([1, 0], "average_level")
     assert ranking([risk(), risk()]) == ([0, 1], "tie")
     assert ranking([risk()]) == ([0], None)
+
+
+# Each case below is three routes, built so the recommended one loses on every criterion
+# after the one that should decide: only that criterion can have picked it.
+
+
+def test_rule_1_fewest_severe_miles():
+    risks = [
+        risk(severe=8, high=0, average=0.5, travel_min=200),
+        risk(severe=6, high=0, average=0.5, travel_min=200),
+        risk(severe=2, high=40, average=3.0, travel_min=600),
+    ]
+    assert ranking(risks) == ([2, 1, 0], "severe_miles")
+
+
+def test_rule_2_severe_tied_fewest_high_miles():
+    risks = [
+        risk(severe=3, high=12, average=0.5, travel_min=200),
+        risk(severe=3, high=4, average=2.5, travel_min=600),
+        risk(severe=3, high=7, average=0.5, travel_min=200),
+    ]
+    assert ranking(risks) == ([1, 2, 0], "high_miles")
+
+
+def test_rule_3_no_severe_or_high_lowest_average():
+    risks = [
+        risk(average=1.4, travel_min=200),
+        risk(average=0.9, travel_min=200),
+        risk(average=0.3, travel_min=600),
+    ]
+    assert ranking(risks) == ([2, 1, 0], "average_level")
+
+
+def test_rule_3_severe_and_high_tied_lowest_average():
+    risks = [
+        risk(severe=5, high=10, average=1.1, travel_min=600),
+        risk(severe=5, high=10, average=2.2, travel_min=200),
+        risk(severe=5, high=10, average=1.6, travel_min=200),
+    ]
+    assert ranking(risks) == ([0, 2, 1], "average_level")
+
+
+def test_rule_4_everything_else_tied_shortest_travel_time():
+    risks = [
+        risk(average=0.7, travel_min=340),
+        risk(average=0.7, travel_min=360),
+        risk(average=0.7, travel_min=315),
+    ]
+    assert ranking(risks) == ([2, 0, 1], "travel_s")

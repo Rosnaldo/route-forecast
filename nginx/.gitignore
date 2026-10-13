@@ -1,0 +1,4 @@
+# Private keys and certificates: dev (mkcert) and prod (Let's Encrypt).
+**/certs/
+prod/letsencrypt/
+prod/certbot/

@@ -19,52 +19,8 @@ Cargo weight then raises the wind level (see WIND_LOAD_RULES):
     35-44 mph   > 40,000 lb     Severe
 """
 
-from dataclasses import dataclass
-from enum import IntEnum, StrEnum
-
-
-class RiskLevel(IntEnum):
-    """Ordered, so levels compare and max() gives the worst one."""
-
-    LOW = 0
-    MODERATE = 1
-    HIGH = 2
-    SEVERE = 3
-    NO_TRAVEL = 4
-
-    @property
-    def label(self) -> str:
-        return self.name.replace("_", " ").title()
-
-
-class Condition(StrEnum):
-    WIND = "wind"
-    RAIN = "rain"
-    SNOW = "snow"
-
-
-@dataclass(frozen=True)
-class Threshold:
-    level: RiskLevel
-    value: float
-    exclusive: bool = False  # True: the level needs value > bound, not >=
-
-
-@dataclass(frozen=True)
-class Rule:
-    condition: Condition
-    unit: str
-    thresholds: tuple[Threshold, ...]  # ascending; below the first one is Low
-
-    def classify(self, value: float) -> RiskLevel:
-        level = RiskLevel.LOW
-        for threshold in self.thresholds:
-            reached = value > threshold.value if threshold.exclusive else value >= threshold.value
-            if not reached:
-                break
-            level = threshold.level
-        return level
-
+from ..domain.risk import Condition, RiskLevel, Rule, Threshold, WindLoadRule
+from ..domain.weather import Forecast
 
 RULES: dict[Condition, Rule] = {
     rule.condition: rule
@@ -103,17 +59,6 @@ RULES: dict[Condition, Rule] = {
 }
 
 
-@dataclass(frozen=True)
-class WindLoadRule:
-    """Wind from `from_mph` up to (not including) `to_mph`, with cargo over `over_lb`,
-    is at least `level`."""
-
-    over_lb: int
-    from_mph: float
-    to_mph: float
-    level: RiskLevel
-
-
 # Heavier loads raise the wind level. >= 55 mph is already No Travel for any load.
 WIND_LOAD_RULES = (
     WindLoadRule(over_lb=30_000, from_mph=45, to_mph=55, level=RiskLevel.NO_TRAVEL),
@@ -126,7 +71,7 @@ def classify(condition: Condition, value: float, weight_lb: float = 0) -> RiskLe
 
     classify(Condition.WIND, 40) -> HIGH; classify(Condition.WIND, 40, 45_000) -> SEVERE.
     """
-    level = RULES[condition].classify(value)
+    level = _rule_level(RULES[condition], value)
     if condition is Condition.WIND:
         for rule in WIND_LOAD_RULES:
             if weight_lb > rule.over_lb and rule.from_mph <= value < rule.to_mph:
@@ -137,3 +82,31 @@ def classify(condition: Condition, value: float, weight_lb: float = 0) -> RiskLe
 def overall(values: dict[Condition, float], weight_lb: float = 0) -> RiskLevel:
     """Worst level across conditions: 30 mph wind + 1.5 in/hr snow -> HIGH."""
     return max((classify(c, v, weight_lb) for c, v in values.items()), default=RiskLevel.LOW)
+
+
+def risk_label(level: RiskLevel) -> str:
+    """The level's name for people: NO_TRAVEL -> "No Travel"."""
+    return level.name.replace("_", " ").title()
+
+
+def forecast_level(forecast: Forecast, weight_lb: float = 0) -> RiskLevel:
+    """Risk level of an hour's forecast for the cargo weight."""
+    return overall(
+        {
+            Condition.WIND: forecast.wind_mph,
+            Condition.RAIN: forecast.rain_in_hr,
+            Condition.SNOW: forecast.snow_in_hr,
+        },
+        weight_lb,
+    )
+
+
+def _rule_level(rule: Rule, value: float) -> RiskLevel:
+    """The highest threshold `value` reaches; Low below the first one."""
+    level = RiskLevel.LOW
+    for threshold in rule.thresholds:
+        reached = value > threshold.value if threshold.exclusive else value >= threshold.value
+        if not reached:
+            break
+        level = threshold.level
+    return level

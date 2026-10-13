@@ -138,16 +138,6 @@ SPECTACULAR_SETTINGS = {
     "SERVE_INCLUDE_SCHEMA": False,
 }
 
-# ------------------------------------------------------------------------- celery
-CELERY_BROKER_URL = env("CELERY_BROKER_URL", default=f"{REDIS_URL}/0")
-CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", default=f"{REDIS_URL}/0")
-CELERY_TASK_ACKS_LATE = True  # re-deliver if a worker dies mid-task (tasks must be idempotent)
-CELERY_WORKER_PREFETCH_MULTIPLIER = 1
-CELERY_TASK_TIME_LIMIT = 5 * 60
-CELERY_TASK_SOFT_TIME_LIMIT = 4 * 60
-CELERY_TIMEZONE = TIME_ZONE
-CELERY_BEAT_SCHEDULE: dict = {}  # periodic tasks: {"name": {"task": "...", "schedule": seconds}}
-
 # ------------------------------------------------------------------------ logging
 LOG_LEVEL = env("LOG_LEVEL", default="INFO")
 LOGGING = {

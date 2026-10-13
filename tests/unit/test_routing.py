@@ -3,16 +3,10 @@ from unittest import mock
 import pytest
 
 from apps.core.exceptions import UpstreamError
-from apps.trips.routing import (
-    MAX_ROUTES,
-    Point,
-    Route,
-    Step,
-    _overlap,
-    _side_point,
-    compute_routes,
-    haversine_m,
-)
+from apps.trips.business.route import MAX_ROUTES, haversine_m, length_m, overlap, side_point
+from apps.trips.business.timing import speed_mps
+from apps.trips.domain.route import Point, Route, Step
+from apps.trips.services.routing import compute_routes
 
 # Routes from (0, 0) to (0, 1), (lat, lon): straight east, and bowing north or south.
 MAIN = Route(100_000, 3600, [Point(0.0, 0.0), Point(0.0, 0.5), Point(0.0, 1.0)], "Main")
@@ -40,7 +34,7 @@ def fake_google(main, fallbacks):
             raise answer
         return [Route(**{**vars(answer), "source": source})] if answer else []
 
-    return mock.patch("apps.trips.routing._request", side_effect=request), calls
+    return mock.patch("apps.trips.services.routing._request", side_effect=request), calls
 
 
 def test_three_google_routes_need_no_fallback():
@@ -94,18 +88,18 @@ def test_no_route_found_skips_fallbacks():
 
 def test_side_point_is_left_of_the_direction_of_travel():
     # Heading east along the equator: left is north.
-    assert _side_point((0.0, 0.0), (0.0, 1.0), 0.15) == pytest.approx((0.15, 0.5))
-    assert _side_point((0.0, 0.0), (0.0, 1.0), -0.3) == pytest.approx((-0.3, 0.5))
+    assert side_point((0.0, 0.0), (0.0, 1.0), 0.15) == pytest.approx((0.15, 0.5))
+    assert side_point((0.0, 0.0), (0.0, 1.0), -0.3) == pytest.approx((-0.3, 0.5))
 
 
 def test_overlap():
-    assert _overlap(MAIN, MAIN) == pytest.approx(1)
-    assert _overlap(NORTH, MAIN) < 0.1
+    assert overlap(MAIN, MAIN) == pytest.approx(1)
+    assert overlap(NORTH, MAIN) < 0.1
 
 
 def test_route_length_along_its_points():
     # One degree of longitude on the equator, in two halves.
-    assert MAIN.length_m() == pytest.approx(haversine_m(0, 0, 0, 1))
+    assert length_m(MAIN) == pytest.approx(haversine_m(0, 0, 0, 1))
     assert haversine_m(0, 0, 0, 1) == pytest.approx(111_195, abs=1)
 
 
@@ -113,5 +107,5 @@ def test_point_and_step_are_named_tuples():
     point = Point(39.74, -104.99)
     lat, lon = point  # still unpacks like the old (lat, lon) tuple
     assert (lat, lon) == (point.lat, point.lon) == (39.74, -104.99)
-    assert Step(1000, 40).speed_mps == 25
-    assert Step(1000, 0).speed_mps is None  # no time: no speed
+    assert speed_mps(Step(1000, 40)) == 25
+    assert speed_mps(Step(1000, 0)) is None  # no time: no speed

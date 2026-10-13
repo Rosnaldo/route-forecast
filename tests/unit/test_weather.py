@@ -7,20 +7,22 @@ from unittest import mock
 import pytest
 from shapely import box
 
-from apps.trips import weather as weather_module
-from apps.trips.counties import County
-from apps.trips.risk import RiskLevel
-from apps.trips.routing import Point, Route
-from apps.trips.timing import TravelTimes
-from apps.trips.weather import (
+from apps.trips.business import weather as weather_module
+from apps.trips.business.geometry import outline
+from apps.trips.business.risk import forecast_level
+from apps.trips.business.route import length_m
+from apps.trips.business.timing import TravelTimes
+from apps.trips.business.weather import (
     FORECAST_HOURS,
-    FailedBatch,
-    Forecast,
     _grid_pieces,
-    _series,
-    forecast_events,
+    point_series,
     weather_grid,
 )
+from apps.trips.domain.county import County
+from apps.trips.domain.risk import RiskLevel
+from apps.trips.domain.route import Point, Route
+from apps.trips.domain.weather import FailedBatch, Forecast
+from apps.trips.services.weather import _series, forecast_events
 
 START = 1_800_000_000 - 1_800_000_000 % 3600  # on the hour
 NOW = START + 600  # ten past
@@ -53,14 +55,14 @@ def fake_open_meteo(**values):
         locations = [{"hourly": hourly(**values)} for _ in range(count)]
         return io.BytesIO(json.dumps(locations if count > 1 else locations[0]).encode())
 
-    return mock.patch("apps.trips.weather.urllib.request.urlopen", side_effect=urlopen)
+    return mock.patch("apps.trips.services.weather.urllib.request.urlopen", side_effect=urlopen)
 
 
 def test_forecast_level_is_worst_condition():
     forecast = Forecast(wind_mph=40, rain_in_hr=0, snow_in_hr=0.6)
-    assert forecast.level() == RiskLevel.HIGH
-    assert forecast.level(45_000) == RiskLevel.SEVERE  # 35-44 mph over 40,000 lb
-    assert Forecast(wind_mph=0, rain_in_hr=0, snow_in_hr=0).level() == RiskLevel.LOW
+    assert forecast_level(forecast) == RiskLevel.HIGH
+    assert forecast_level(forecast, 45_000) == RiskLevel.SEVERE  # 35-44 mph over 40,000 lb
+    assert forecast_level(Forecast(wind_mph=0, rain_in_hr=0, snow_in_hr=0)) == RiskLevel.LOW
 
 
 def test_grid_pieces_split_on_county_borders():
@@ -110,12 +112,12 @@ def test_weather_grid_is_the_layout_without_forecasts():
     # fallback speed (no steps; Google's 4 h duration is not used): 34.5 km at 100 km/h.
     (route_cells,) = grid.route_cells
     assert sorted(rc.cell for rc in route_cells) == [0, 1, 2, 3]
-    length, times = ROUTE.length_m(), TravelTimes(ROUTE)
+    length, times = length_m(ROUTE), TravelTimes(ROUTE)
     quarter, three_quarters = times.elapsed_s(length / 4), times.elapsed_s(length * 3 / 4)
     assert sorted({rc.offset_s for rc in route_cells}) == [quarter, three_quarters]
     # Points come in the order the truck reaches them: the west (departure) side first.
     assert [lon for _, lon in grid.points] == [-104.9, -104.9, -104.7, -104.7]
-    assert grid.cells[0].outline()["type"] == "Polygon"
+    assert outline(grid.cells[0].piece)["type"] == "Polygon"
 
 
 def events(centers=None, weight_lb=20_000, **values):
@@ -130,10 +132,10 @@ def test_forecast_events_classify_each_hour_for_the_weight():
     assert [i for i, _ in batch.points] == [0, 1, 2, 3]
     _, point = batch.points[0]
     # 40 mph wind is High, Severe over 40,000 lb.
-    assert point.levels == [RiskLevel.SEVERE] * (FORECAST_HOURS + 1)
-    assert point.wind_mph[0] == 40
+    assert point_series(point)["levels"] == [RiskLevel.SEVERE] * (FORECAST_HOURS + 1)
+    assert point_series(point)["wind_mph"][0] == 40
     (light,), _ = events(weight_lb=20_000, wind=40)
-    assert set(light.points[0][1].levels) == {RiskLevel.HIGH}
+    assert set(point_series(light.points[0][1])["levels"]) == {RiskLevel.HIGH}
 
 
 def test_forecast_events_come_in_batches_of_80_cached_first():
@@ -159,7 +161,7 @@ def test_forecast_events_cache_what_they_fetch():
 
 
 def test_weather_grid_coarsens_long_routes():
-    with mock.patch("apps.trips.weather.MAX_CELLS", 1), fake_open_meteo():
+    with mock.patch("apps.trips.business.weather.MAX_CELLS", 1), fake_open_meteo():
         grid = weather_grid([(ROUTE, [SQUARE])], now=NOW)
     assert len(grid.points) == 1
     assert {cell.point for cell in grid.cells} == {0}
@@ -181,7 +183,7 @@ def test_routes_share_cells():
         {grid.cells[rc.cell].point: rc.offset_s for rc in cells} for cells in grid.route_cells
     )
     assert there.keys() == back_again.keys()
-    total = TravelTimes(ROUTE).elapsed_s(ROUTE.length_m())
+    total = TravelTimes(ROUTE).elapsed_s(length_m(ROUTE))
     assert all(abs(there[p] + back_again[p] - total) <= 1 for p in there)
 
 
@@ -205,7 +207,7 @@ def test_weather_api_errors_fail_only_their_batch(error, message):
         count = len(query["latitude"][0].split(","))
         return io.BytesIO(json.dumps([{"hourly": hourly()}] * count).encode())
 
-    with mock.patch("apps.trips.weather.urllib.request.urlopen", side_effect=urlopen):
+    with mock.patch("apps.trips.services.weather.urllib.request.urlopen", side_effect=urlopen):
         result = list(forecast_events(centers, START, 0))
     failed = [e for e in result if isinstance(e, FailedBatch)]
     loaded = [e for e in result if not isinstance(e, FailedBatch)]
@@ -217,7 +219,9 @@ def test_weather_api_errors_fail_only_their_batch(error, message):
 def test_grid_step_jumps_to_a_size_that_fits():
     # A 4 x 4 degree county: 400 cells at 0.2 degrees, more than MAX_CELLS (300).
     big = County("99004", "Big", "ZZ", box(-110.0, 38.0, -106.0, 42.0))
-    with mock.patch("apps.trips.weather._cell_count", wraps=weather_module._cell_count) as count:
+    with mock.patch(
+        "apps.trips.business.weather._cell_count", wraps=weather_module._cell_count
+    ) as count:
         step = weather_module._grid_step([[big]])
     assert weather_module._cell_count([[big]], step) <= weather_module.MAX_CELLS
     assert step > weather_module.GRID_STEP

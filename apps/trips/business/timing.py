@@ -16,7 +16,8 @@ includes it.
 import bisect
 import itertools
 
-from .routing import Route
+from ..domain.route import Route, Step
+from .route import length_m
 
 FALLBACK_SPEED_KMH = 100
 FALLBACK_SPEED_MPS = FALLBACK_SPEED_KMH * 1000 / 3600
@@ -26,25 +27,25 @@ BREAK_S = 30 * 60
 
 class TravelTimes:
     """Travel times along one route, by distance from departure (meters along the
-    route's points, as measured by Route.length_m)."""
+    route's points, as measured by route.length_m)."""
 
     def __init__(self, route: Route):
-        length_m = route.length_m()
+        route_m = length_m(route)
         step_m = sum(step.distance_m for step in route.steps)
         # Google's step distances are scaled onto our measured length, so the profile
         # covers exactly the route's points.
-        scale = length_m / step_m if step_m and length_m else 0
+        scale = route_m / step_m if step_m and route_m else 0
         self._ends = []  # cumulative distance at the end of each section
         self._starts_s = [0.0]  # driving seconds at the start of each section
         self._speeds = []  # meters per second within each section
         if scale:
             sections = [
-                (step.distance_m * scale, step.speed_mps or FALLBACK_SPEED_MPS)
+                (step.distance_m * scale, speed_mps(step) or FALLBACK_SPEED_MPS)
                 for step in route.steps
                 if step.distance_m
             ]
         else:
-            sections = [(length_m, FALLBACK_SPEED_MPS)]
+            sections = [(route_m, FALLBACK_SPEED_MPS)]
         for end, (distance, speed) in zip(
             itertools.accumulate(d for d, _ in sections), sections, strict=True
         ):
@@ -63,6 +64,11 @@ class TravelTimes:
     def elapsed_s(self, distance_m: float) -> int:
         """Seconds from departure to reach `distance_m`, breaks included."""
         return elapsed_with_breaks(self.driving_s(distance_m))
+
+
+def speed_mps(step: Step) -> float | None:
+    """Google's speed for the step; None when it gives no time."""
+    return step.distance_m / step.duration_s if step.duration_s else None
 
 
 def elapsed_with_breaks(driving_s: float) -> int:
