@@ -5,13 +5,13 @@ All nginx configuration for the project.
 ```
 nginx/
 ├── .env.dev                     BASE_DOMAIN, ADMIN_EMAIL for development
-├── .env.prod                    BASE_DOMAIN, ADMIN_EMAIL for production
+├── .env.prod                    BASE_DOMAIN, ADMIN_EMAIL, FRONTEND_URL for production
 ├── dev/
 │   ├── nginx.conf               docker-compose.yml → nginx
 │   └── certs/                   mkcert certificates (git-ignored)
 └── prod/
     ├── http/nginx.conf          docker-compose.prod.yml → nginx-http
-    ├── https/nginx.conf         docker-compose.prod.yml → nginx-https (also serves the React app)
+    ├── https/nginx.conf         docker-compose.prod.yml → nginx-https (the API; the app is on CloudFront)
     ├── certbot/                 ACME challenge files (git-ignored)
     └── letsencrypt/             Let's Encrypt certificates (git-ignored)
 ```

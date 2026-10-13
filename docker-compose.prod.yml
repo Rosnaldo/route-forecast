@@ -1,9 +1,10 @@
 # Production stack:  docker compose -f docker-compose.prod.yml up -d --build
 #
 # Only nginx is published: nginx-http (80) answers Let's Encrypt's challenge and
-# redirects to HTTPS; nginx-https (443) terminates TLS, proxies /api/, /static/ and
-# /health/ to Django and serves the React bundle itself (it runs the frontend image).
-# Redis and the backend are reachable only inside the stack.
+# redirects to HTTPS; nginx-https (443) terminates TLS and proxies /api/, /static/ and
+# /health/ to Django. Redis and the backend are reachable only inside the stack.
+# The React app is not part of this stack: it is deployed to S3 behind CloudFront
+# (deploy_web_s3.sh), and CloudFront forwards the API paths here.
 #
 # On the first deploy nginx-https restarts until `certbot` has obtained the certificate
 # (nginx/README.md); later deploys find it in nginx/prod/letsencrypt.
@@ -58,16 +59,9 @@ services:
       - ./nginx/prod/http/nginx.conf:/etc/nginx/templates/default.conf.template:ro
       - ./nginx/prod/certbot:/var/www/certbot:ro
 
-  # Port 443: TLS, then Django and the React app. Needs the certificate from `certbot`.
-  # The frontend image is nginx with the built bundle in /usr/share/nginx/html.
+  # Port 443: TLS, then Django. Needs the certificate from `certbot`.
   nginx-https:
-    image: shop-frontend:prod
-    build:
-      context: frontend
-      target: runtime
-      args:
-        # Browser key, baked into the bundle (public by nature; restrict it by referrer).
-        GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY:-}
+    image: nginx:1.27-alpine
     env_file: nginx/.env.prod
     ports: ["443:443"]
     restart: unless-stopped
