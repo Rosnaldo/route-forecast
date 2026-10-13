@@ -227,7 +227,6 @@ a { color: var(--accent); }
   font: 0.8rem/1.4 "Manrope", system-ui, sans-serif; color: #1c1917;
 }
 .legend-swatch { width: 14px; height: 14px; border-radius: 3px; }
-.legend-hover { color: var(--fg); font-weight: 700; }
 
 .route-result { margin-top: 2rem; scroll-margin-top: 1rem; }
 .route-title { font-size: 1.25rem; margin: 0 0 0.25rem; }

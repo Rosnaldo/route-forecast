@@ -4,7 +4,7 @@ import { loadGoogleMaps } from "../lib/googleMaps.js";
 import { LOADING_COLOR, NO_FORECAST_COLOR, RISK_LEVELS, levelColor } from "../lib/risk.js";
 import { routeColor, routeLetter, routeName } from "../lib/routes.js";
 
-const HIGHLIGHT_COLOR = "#1d2433"; // hovered cell outline, departure/arrival dots
+const HIGHLIGHT_COLOR = "#1d2433"; // departure/arrival dots
 const CASING_COLOR = "#ffffff";
 const COUNTY_COLOR = "#5b6472";
 
@@ -13,18 +13,6 @@ const timeFormat = new Intl.DateTimeFormat(undefined, {
   hour: "numeric",
   minute: "2-digit",
 });
-
-function describe(forecast, county) {
-  const where = county ? `${county.name}, ${county.state}` : "";
-  const when = `ETA ${timeFormat.format(new Date(forecast.eta * 1000))}`;
-  if (forecast.loading) return `Loading forecast · ${where}`;
-  if (forecast.level == null) return `No forecast · ${where} · ${when}`;
-  return (
-    `${RISK_LEVELS[forecast.level].label} · ${where} · ${when} · ` +
-    `wind ${Math.round(forecast.wind)} mph, rain ${forecast.rain.toFixed(2)} in/hr, ` +
-    `snow ${forecast.snow.toFixed(2)} in/hr`
-  );
-}
 
 const duration = (seconds) =>
   `${Math.floor(seconds / 3600)} h ${String(Math.round((seconds % 3600) / 60)).padStart(2, "0")} min`;
@@ -103,7 +91,6 @@ export default function RouteMap({
 }) {
   const container = useRef(null);
   const map = useRef(null); // { maps, map, lines: [{ casing, line, label }] } once created
-  const [hovered, setHovered] = useState(null); // index into weather.cells
   const [error, setError] = useState(null);
   const [mapCount, setMapCount] = useState(0); // bumps when a map is created, to fill it
 
@@ -173,20 +160,6 @@ export default function RouteMap({
         });
         instance.fitBounds(bounds, 24);
 
-        listeners.push(
-          instance.data.addListener("mouseover", ({ feature }) => {
-            instance.data.overrideStyle(feature, {
-              fillOpacity: 0.9,
-              strokeColor: HIGHLIGHT_COLOR,
-              strokeWeight: 2,
-            });
-            setHovered(feature.getProperty("index"));
-          }),
-          instance.data.addListener("mouseout", ({ feature }) => {
-            instance.data.revertStyle(feature);
-            setHovered(null);
-          }),
-        );
         // Shared box for a hovered checkpoint's details.
         const info = new InfoWindow({ disableAutoPan: true, headerDisabled: true });
         map.current = { maps, map: instance, lines, Marker, info };
@@ -271,7 +244,6 @@ export default function RouteMap({
           })),
       ],
     });
-    setHovered(null);
     // The cells' shapes only: streamed forecasts recolor them (below), never redraw.
   }, [weather?.cells, countyByFips, mapCount]);
 
@@ -286,10 +258,11 @@ export default function RouteMap({
             // Loading cells stay light so the map shows through until colored.
             fillOpacity: forecasts[feature.getProperty("index")]?.loading ? 0.35 : 0.7,
             strokeWeight: 0,
+            clickable: false, // no hover: the map pans and zooms right through
             zIndex: 1,
           }
         : {
-            // Outline only, and not clickable, so hover reaches the cells below.
+            // Outline only.
             fillOpacity: 0,
             strokeColor: COUNTY_COLOR,
             strokeOpacity: 0.6,
@@ -303,7 +276,6 @@ export default function RouteMap({
   if (error) return <p className="notice">{error}</p>;
   const loadingCount = forecasts.filter((forecast) => forecast.loading).length;
   const hasNoForecast = forecasts.some((forecast) => forecast.level == null && !forecast.loading);
-  const hoveredFips = hovered == null ? null : weather?.cells[hovered]?.fips;
   return (
     <figure className="route-map">
       <div
@@ -344,9 +316,6 @@ export default function RouteMap({
               No forecast
             </span>
           )}
-        </span>
-        <span className="legend-hover" aria-live="polite">
-          {hoveredFips && describe(forecasts[hovered], countyByFips.get(hoveredFips))}
         </span>
       </figcaption>
     </figure>
